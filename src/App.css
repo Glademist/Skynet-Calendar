@@ -1,38 +1,588 @@
+/* Aplikace */
 .App {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+.main-content {
+  flex: 1;
+  overflow: hidden;
+}
+.settings-page {
+  padding: 30px;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.form-row label {
+  width: 220px;
+  text-align: right;
+  font-weight: 500;
+}
+
+.form-row input,
+.form-row select {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 1em;
+}
+
+/* NAVIGACE */
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 30px;
+  background: #ffffff;
+  border-bottom: 1px solid #e0e0e0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  flex-shrink: 0;
+  min-width: 0; /* Důležité pro flex */
+}
+.header button {
+  padding: 8px 16px;
+  background: #cc0000;
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+.header h1 {
+  margin: 0;
+  font-size: 1.5em;
+  color: #333;
+}
+.nav-menu {
+  display: flex;
+  gap: 28px;
+  flex-shrink: 0; /* Nezmenšuje se */
+}
+
+.nav-menu button {
+  background: none;
+  border: none;
+  font-size: 1.05em;
+  font-weight: 500;
+  color: #555;
+  padding: 6px 0;
+  cursor: pointer;
+  transition: color 0.2s ease;
+  font-family: inherit;
+  white-space: nowrap; /* Nezalomí text */
+}
+
+.nav-menu button:hover {
+  color: #007bff;
+}
+
+.nav-active {
+  color: #007bff !important;
+  font-weight: 600;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.user-name {
+  font-size: 1.05em;
+  font-weight: 500;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px; /* Ořízne při malém okně */
+}
+
+/* Dny */
+
+.fc-daygrid-day {
+  cursor: pointer;
+}
+.status-available {
+  background-color: transparent !important;
+}
+.status-available.special-day {
+  background-color: #e6f3ff !important;
+}
+.status-not-available {
+  background-color: #cc0000 !important;
+}
+.status-not-available.special-day {
+  background-color: #9e0101 !important;
+}
+.status-preferred {
+  background-color: #008000 !important;
+}
+.status-preferred.special-day {
+  background-color: #005f00 !important;
+}
+.non-current {
+  opacity: 0.5 !important;
+  filter: grayscale(50%) !important;
+}
+.non-current .custom-day {
+  color: #999 !important;
+}
+
+/* Zobrazeni dne */
+
+.fc-daygrid-day-frame {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  padding: 2px !important;
+  height: 100%;
+}
+.custom-day {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  padding: 2px;
+}
+.day-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;     /* ← VYROVNÁ OBSAH NA STŘED */
+  height: 100%;                /* ← ZABERE CELÝ PROSTOR BUŇKY */
+  text-align: right;
+  padding: 2px 0;              /* ← JEN VERTIKÁLNĚ */
+  box-sizing: border-box;
+}
+.day-number {
+  font-weight: 600;
+  font-size: 1em;
+  line-height: 1.2;
+  margin: 0;
+}
+.holiday-label {
+  font-size: 0.65em;
+  color: rgb(90, 90, 90);
+  font-weight: 500;
+  line-height: 1.1;            /* ← NÍZKÝ ŘÁDKOVÝ ODDÍL */
+  margin: 1px 0 0 0;           /* ← MINIMÁLNÍ MEZERA */
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;             /* ← NEPŘESAHUJE */
+}
+.fc {
+  width: calc(100vw - 100px);
+  height: calc(100vh - 110px);
+  margin: 0 50px 50px 50px;
+  padding: 0;
+}
+
+h1 {
+  margin: 10px 0;
+}
+
+
+/* Tlacitka */
+.logout-btn {
+  padding: 7px 16px;
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9em;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  white-space: nowrap;
+}
+
+.logout-btn:hover {
+  background: #c82333;
+}
+.fc .fc-button.fc-button-active {
+  background-color: #007bff !important;
+  border-color: #007bff !important;
+  box-shadow: none !important;
+}
+/* Základní vzhled – všechna tlačítka stejně */
+.fc .fc-button {
+  background-color: #a1a1a1 !important;
+  border-color: #b6b6b6 !important;
+  color: white !important;
+  border-radius: 6px !important;
+  font-weight: 500 !important;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+}
+/* Hover efekt */
+.fc .fc-button:hover {
+  background-color: #0056b3 !important;
+  border-color: #0056b3 !important;
+}
+/* Klik – krátký efekt, pak zpět */
+.fc .fc-button:active {
+  background-color: #004085 !important;
+  border-color: #004085 !important;
+  transform: translateY(1px);
+}
+.save-btn {
+  margin-top: 20px;
+  padding: 12px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 1em;
+  cursor: pointer;
+}
+
+.save-btn:hover {
+  background: #0056b3;
+}
+
+/*
+
+ADMIN SEKCE
+
+*/
+.checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: normal;
+}
+
+.checkbox-label input {
+  margin: 0;
+}
+
+.admin-panel {
+  padding: 20px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+  font-size: 0.9em;
+}
+
+.admin-table th,
+.admin-table td {
+  border: 1px solid #ddd;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.admin-table th {
+  background: #f4f4f4;
+  font-weight: 600;
+}
+
+.admin-table tr:nth-child(even) {
+  background: #fafafa;
+}
+
+/*
+
+SCHEDULER
+
+*/
+.scheduler {
+  padding: 20px;
+}
+
+.sched-day {
+  font-weight: 600;
+  text-align: center;
+  font-size: 1.1em;
+}
+
+.assigned-day {
+  background: #d4edda !important;
+  border: 2px solid #28a745 !important;
+}
+
+.legend {
+  margin-top: 15px;
+  font-size: 0.9em;
+  color: #666;
   text-align: center;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
+.scheduler-layout {
   display: flex;
-  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+}
+
+.left-column {
+  flex: 3;
+  overflow: auto;
+  max-height: 80vh;
+}
+
+.right-column {
+  flex: 1;
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 8px;
+}
+
+.schedule-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.schedule-table td,
+.schedule-table th {
+  width: 20px !important;
+  height: 20px !important;
+  padding: 0 !important;
+  text-align: center;
+  font-size: 0.8em;
+  line-height: 25px;
+  border: 1px solid #ddd;
+}
+
+.schedule-table th {
+  background: #e9ecef;
+  font-weight: 600;
+}
+
+.schedule-table td {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+}
+
+.not-available { background: #f8d7da; cursor: not-allowed; }
+.preferred { background: #d4edda; }
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.special-day { background: #e6f3ff !important; }
+
+.group-toggle {
+  background: none;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+  margin: 10px 0 5px;
+}
+
+.stats-table {
+  width: 100%;
+  font-size: 0.9em;
+  margin-bottom: 15px;
+}
+
+.stats-table th, .stats-table td {
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.left-column {
+  overflow-x: auto;
+}
+
+.schedule-table td {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Skupiny – jen písmeno */
+.schedule-table td:not(:first-child) {
+  font-weight: 700;
+  color: #333;
+}
+
+.fixed-header {
+  position: sticky;
+  top: 0;
+  background: white;
+  z-index: 10;
+  border-bottom: 2px solid #007bff;
+}
+
+.q-nav {
+  display: flex;
+  gap: 10px;
   align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.q-nav button {
+  padding: 6px 12px;
+  font-size: 0.9em;
+}
+
+.group-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+}
+
+.group-btn {
+  padding: 6px 12px;
+  font-size: 0.9em;
+  font-weight: 500;
+  background: #f1f3f5;
+  color: #495057;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.group-btn.active {
+  background: #007bff;
   color: white;
+  border-color: #007bff;
 }
 
-.App-link {
-  color: #61dafb;
+.group-btn:hover {
+  background: #e2e6ea;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.group-btn.active:hover {
+  background: #0056b3;
+}
+
+.stats-block {
+  margin-bottom: 20px;
+}
+
+.q-nav {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 15px;
+}
+
+.q-nav button {
+  padding: 6px 12px;
+  font-size: 0.9em;
+}
+
+.stats-compact {
+  margin-bottom: 25px;
+  font-size: 0.9em;
+}
+
+.stats-header {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: #212529;
+}
+
+.doc-name {
+  width: 40px;
+  text-align: center;
+  background: #f8f9fa;
+  padding: 4px 2px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 20px repeat(auto-fit, 40px);
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.label {
+  font-weight: 600;
+  color: #495057;
+  text-align: center;
+  font-size: 0.8em;
+}
+
+.stats-grid > div:not(.label) {
+  text-align: center;
+  background: #fff;
+  padding: 4px 2px;
+  border: 1px solid #e9ecef;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.stats-table-block {
+  margin-bottom: 30px;
+}
+
+.stats-compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  table-layout: fixed;
+}
+
+.stats-compact-table th,
+.stats-compact-table td {
+  border: 1px solid #dee2e6;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.stats-compact-table th {
+  background: #f8f9fa;
+  font-weight: 600;
+  font-size: 0.85em;
+}
+
+.row-label {
+  background: #e9ecef;
+  font-weight: 600;
+  text-align: center;
+  padding-right: 8px;
+  font-size: 0.8em;
+  width: 30px;
+}
+
+.stats-compact-table tbody tr:hover td {
+  background: #f5f5f5;
 }
