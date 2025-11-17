@@ -286,23 +286,24 @@ ADMIN SEKCE
 }
 
 .admin-panel {
+  max-height: 80vh;
+  overflow-y: auto;
   padding: 20px;
-  max-width: 1000px;
-  margin: 0 auto;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  background: #fff;
 }
 
-.admin-table {
+.admin-panel table {
   width: 100%;
-  border-collapse: collapse;
-  margin-top: 10px;
-  font-size: 0.9em;
+  table-layout: auto;
 }
 
-.admin-table th,
-.admin-table td {
-  border: 1px solid #ddd;
-  padding: 8px 10px;
-  text-align: left;
+.admin-panel th,
+.admin-panel td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .admin-table th {
@@ -312,6 +313,28 @@ ADMIN SEKCE
 
 .admin-table tr:nth-child(even) {
   background: #fafafa;
+}
+
+.users-table {
+  width: 100%;
+  margin-top: 15px;
+  font-size: 0.9em;
+}
+
+.users-table th, .users-table td {
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  text-align: left;
+}
+
+.export-btn {
+  margin-top: 20px;
+  padding: 8px 16px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
 /*

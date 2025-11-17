@@ -1,4 +1,3 @@
-// src/App.js
 import React, { useState, useEffect } from 'react';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -95,11 +94,16 @@ function App() {
   const handleLogin = (googleUser) => {
     setUser(googleUser);
 
-    const hasSettings = localStorage.getItem(`settings_${googleUser.uid}`);
+    const uid = googleUser.uid;
+    const hasSettings = localStorage.getItem(`settings_${uid}`);
+
     if (!hasSettings) {
+      setView('settings');
       setTimeout(() => {
-        window.notify('Vítejte! Prosím, vyplňte Nastavení → vaše preference', 'info');
-      }, 1000);
+        window.notify('Vítejte! Prosím, vyplňte Nastavení – zvolte svou zkratku.', 'info');
+      }, 500);
+    } else {
+      setView('calendar');
     }
   };
 

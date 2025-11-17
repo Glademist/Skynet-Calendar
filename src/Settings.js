@@ -1,5 +1,6 @@
 // src/Settings.js
 import React, { useState, useEffect } from 'react';
+import { SHORTCUTS } from './constants';
 
 const allGroups = ['staří', 'střední', 'mladí'];
 
@@ -65,7 +66,16 @@ export default function Settings({ user, onSave }) {
         </div>
         <div className="form-row">
           <label>Zkratka:</label>
-          <input name="shortcut" value={form.shortcut} onChange={handleChange} maxLength="3" required />
+          <select
+            value={form.shortcut}
+            onChange={(e) => setForm({ ...form, shortcut: e.target.value })}
+            required
+          >
+            <option value="">-- Vyberte zkratku --</option>
+            {SHORTCUTS.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
         </div>
         <div className="form-row">
           <label>Počet všedních služeb:</label>

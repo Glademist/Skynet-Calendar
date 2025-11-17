@@ -1,6 +1,45 @@
 // src/AdminPanel.js
 import React, { useState, useEffect } from 'react';
 
+const exportAllData = () => {
+  const data = {
+    users: {},
+    assignments: {},
+    preferences: {}
+  };
+
+  Object.keys(localStorage).forEach(key => {
+    if (key.startsWith('settings_')) {
+      const uid = key.split('_')[1];
+      data.users[uid] = JSON.parse(localStorage.getItem(key));
+    }
+    if (key.startsWith('schedule_')) {
+      data.assignments[key] = JSON.parse(localStorage.getItem(key));
+    }
+    if (key.startsWith('dayStyles_')) {
+      const uid = key.split('_')[1];
+      data.preferences[uid] = JSON.parse(localStorage.getItem(key));
+    }
+  });
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `backup_${new Date().toISOString().split('T')[0]}.json`;
+  a.click();
+};
+
+const approveUser = (uid, setUsers) => {
+  const settings = JSON.parse(localStorage.getItem(`settings_${uid}`));
+  settings.approved = true;
+  localStorage.setItem(`settings_${uid}`, JSON.stringify(settings));
+  window.notify(`Uživatel ${settings.shortcut} schválen`, 'success');
+
+  // Aktualizuj stav
+  setUsers(prev => prev.map(u => u.uid === uid ? { ...u, approved: true } : u));
+};
+
 export default function AdminPanel() {
   const [users, setUsers] = useState([]);
 
@@ -19,7 +58,7 @@ export default function AdminPanel() {
           name = u.name;
         }
       }
-      return { ...settings, email, name, uid };
+      return { ...settings, email, name, uid, approved: settings.approved || false };
     });
     setUsers(userData);
   }, []);
@@ -47,7 +86,7 @@ export default function AdminPanel() {
               <td>{u.firstName}</td>
               <td>{u.lastName}</td>
               <td>{u.email}</td>
-              <td>{u.groups.join(', ')}</td>
+              <td>{u.groups?.join(', ') || ''}</td>
               <td>{u.weekdayShifts}</td>
               <td>{u.weekendShifts}</td>
               <td>{u.shiftInterval}</td>
@@ -55,6 +94,38 @@ export default function AdminPanel() {
           ))}
         </tbody>
       </table>
+
+      <h3>Uživatelé ke schválení</h3>
+      <table className="users-table">
+        <thead>
+          <tr>
+            <th>Jméno</th>
+            <th>Zkratka</th>
+            <th>Email</th>
+            <th>Schváleno</th>
+            <th>Akce</th>
+          </tr>
+        </thead>
+        <tbody>
+          {users.map(u => (
+            <tr key={u.uid}>
+              <td>{u.firstName} {u.lastName}</td>
+              <td>{u.shortcut}</td>
+              <td>{u.email}</td>
+              <td>{u.approved ? '✓' : '✗'}</td>
+              <td>
+                {!u.approved && (
+                  <button onClick={() => approveUser(u.uid, setUsers)}>Schválit</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <button onClick={exportAllData} className="export-btn">
+        Exportovat vše (JSON)
+      </button>
     </div>
   );
 }
