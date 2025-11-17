@@ -3,12 +3,15 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import csLocale from '@fullcalendar/core/locales/cs';
-import GoogleLoginButton from './GoogleLoginButton';
+import Login from './Login';
 import Settings from './Settings';
-import AdminPanel from './AdminPanel';
 import Scheduler from './Scheduler';
-import './App.css';
+import AdminPanel from './AdminPanel';
 import NotificationBar from './NotificationBar';
+import { auth, db } from './firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import './App.css';
 
 // Easter calculation
 const getEasterSunday = (year) => {
@@ -69,19 +72,49 @@ function App() {
   const [user, setUser] = useState(null);
   const [dayStyles, setDayStyles] = useState([]);
   const [view, setView] = useState('calendar'); // 'calendar' or 'settings'
-  //const [settings, setSettings] = useState(null);
   const holidays = generateHolidays();
 
   // Load user & choices
   useEffect(() => {
-    const savedUser = localStorage.getItem('user');
-    if (savedUser) setUser(JSON.parse(savedUser));
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        const cleanUser = {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          given_name: firebaseUser.displayName?.split(' ')[0] || '',
+          family_name: firebaseUser.displayName?.split(' ').slice(1).join(' ') || '',
+          name: firebaseUser.displayName || '',
+          picture: firebaseUser.photoURL
+        };
+        setUser(cleanUser);
 
-    const uid = JSON.parse(savedUser || '{}').uid;
-    if (uid) {
-      const savedStyles = localStorage.getItem(`dayStyles_${uid}`);
-      if (savedStyles) setDayStyles(JSON.parse(savedStyles));
-    }
+        // 1. Načti nastavení (settings)
+        const settingsRef = doc(db, 'settings', firebaseUser.uid);
+        const settingsSnap = await getDoc(settingsRef);
+
+        if (!settingsSnap.exists()) {
+          setView('settings');
+        } else {
+          setView('calendar');
+        }
+
+        // 2. Načti dayStyles (označené dny v kalendáři)
+        const stylesRef = doc(db, 'dayStyles', firebaseUser.uid);
+        const stylesSnap = await getDoc(stylesRef);
+        if (stylesSnap.exists() && stylesSnap.data().styles) {
+          setDayStyles(stylesSnap.data().styles);
+        } else {
+          setDayStyles([]); // žádné označené dny
+        }
+
+      } else {
+        setUser(null);
+        setView('calendar');
+        setDayStyles([]);
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Save styles per user
@@ -91,49 +124,38 @@ function App() {
     }
   }, [dayStyles, user]);
 
-  const handleLogin = (googleUser) => {
-    setUser(googleUser);
+  const handleDateClick = async (arg) => {
+    if (!user) return;
 
-    const uid = googleUser.uid;
-    const hasSettings = localStorage.getItem(`settings_${uid}`);
+    const dateStr = arg.date.toLocaleDateString('en-CA');
+    const current = dayStyles.find(d => d.date === dateStr)?.status || 'available';
 
-    if (!hasSettings) {
-      setView('settings');
-      setTimeout(() => {
-        window.notify('Vítejte! Prosím, vyplňte Nastavení – zvolte svou zkratku.', 'info');
-      }, 500);
-    } else {
-      setView('calendar');
+    // NOVÉ POŘADÍ – přesně jak chceš
+    const newStatus = current === 'available'      ? 'not available'      :
+                      current === 'not available'      ? 'preferred' :  
+                                                      'available';    
+
+    const newStyles = [
+      ...dayStyles.filter(d => d.date !== dateStr),
+      { date: dateStr, status: newStatus }
+    ];
+
+    setDayStyles(newStyles);
+
+    // Uložení do Firestore
+    try {
+      await setDoc(doc(db, 'dayStyles', user.uid), { styles: newStyles });
+    } catch (err) {
+      console.error('Chyba při ukládání stylu dne:', err);
     }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('user');
-    localStorage.removeItem(`dayStyles_${user?.uid}`);
-    localStorage.removeItem(`settings_${user?.uid}`);
-    setUser(null);
-    setDayStyles([]);
-  };
-
-  const handleDateClick = (arg) => {
-    if (!user) return alert('Nejdřív se přihlaš!');
-
-    const dateStr = arg.date.toLocaleDateString('en-CA'); // ← STEJNÉ JAKO V KALENDÁŘI
-    const current = dayStyles.find(d => d.date === dateStr)?.status || 'available';
-    const next = current === 'available' 
-      ? 'not available' 
-      : current === 'not available' 
-        ? 'preferred' 
-        : 'available';
-
-    setDayStyles(prev => [
-      ...prev.filter(d => d.date !== dateStr),
-      { date: dateStr, status: next }
-    ]);
-  };
+    signOut(auth);
+  };  
 
   if (!user) {
-    return <GoogleLoginButton onLogin={handleLogin} />;
+    return <Login />;
   }
 
   const isAdmin = user?.email === 'skaryd81@gmail.com';

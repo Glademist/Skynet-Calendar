@@ -1,15 +1,16 @@
-// src/Scheduler.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { db } from './firebase';
+import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { generateHolidays } from './utils';
 
 export default function Scheduler() {
-  const [currentQOffset, setCurrentQOffset] = useState(1); // ← Příští Q
+  const [currentQOffset, setCurrentQOffset] = useState(1);
   const [users, setUsers] = useState({});
   const [collapsed, setCollapsed] = useState({});
   const [assignments, setAssignments] = useState({});
   const [days, setDays] = useState([]);
 
-  const groupOrder = ['staří', 'střední', 'mladí'];
+  const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
   const groupLabel = { 'staří': 'S', 'střední': 'M', 'mladí': 'J' };
 
   const today = new Date();
@@ -18,160 +19,150 @@ export default function Scheduler() {
   const targetYear = currentQuarter + currentQOffset > 4 ? today.getFullYear() + 1 : today.getFullYear();
   const qStartMonth = (targetQuarter - 1) * 3;
 
+  // Načítání uživatelů + assignments
   useEffect(() => {
-    const allUsers = [];
-    Object.keys(localStorage).forEach(key => {
-      if (key.startsWith('settings_')) {
-        const uid = key.split('_')[1];
-        const settings = JSON.parse(localStorage.getItem(key));
-        const userData = JSON.parse(localStorage.getItem('user') || '{}');
-        if (userData.uid === uid || key.includes('dummy')) {
-          allUsers.push({ ...settings, uid, email: userData.email || settings.email });
+    const fetchData = async () => {
+      // Uživatelé
+      const snapshot = await getDocs(collection(db, 'settings'));
+      const allUsers = snapshot.docs.map(d => ({ uid: d.id, ...d.data() }));
+
+      const grouped = {};
+      allUsers.forEach(u => {
+        (u.groups || []).forEach(g => {
+          if (!grouped[g]) grouped[g] = [];
+          grouped[g].push(u);
+        });
+      });
+
+      const sortedGroups = {};
+      groupOrder.forEach(g => {
+        if (grouped[g]) sortedGroups[g] = grouped[g];
+      });
+
+      setUsers(sortedGroups);
+      setCollapsed(Object.keys(sortedGroups).reduce((a, g) => ({ ...a, [g]: false }), {}));
+
+      // Dny kvartálu
+      const qDays = [];
+      const qStart = new Date(targetYear, qStartMonth, 1);
+      const prevFriday = new Date(qStart);
+      const dayOfWeek = qStart.getDay();
+      const daysToFriday = dayOfWeek === 0 ? 2 : (dayOfWeek + 2) % 7;
+      prevFriday.setDate(prevFriday.getDate() - daysToFriday);
+
+      for (let d = new Date(prevFriday); d < qStart; d.setDate(d.getDate() + 1)) {
+        qDays.push(d.toLocaleDateString('en-CA'));
+      }
+      for (let m = qStartMonth; m < qStartMonth + 3; m++) {
+        const lastDay = new Date(targetYear, m + 1, 0).getDate();
+        for (let i = 1; i <= lastDay; i++) {
+          qDays.push(new Date(targetYear, m, i).toLocaleDateString('en-CA'));
         }
       }
-    });
+      setDays(qDays);
 
-    const grouped = {};
-    allUsers.forEach(u => {
-      u.groups.forEach(g => {
-        if (!grouped[g]) grouped[g] = [];
-        grouped[g].push(u);
-      });
-    });
-
-    const sortedGroups = {};
-    groupOrder.forEach(g => {
-      if (grouped[g]) sortedGroups[g] = grouped[g];
-    });
-
-    setUsers(sortedGroups);
-    setCollapsed(Object.keys(sortedGroups).reduce((a, g) => ({ ...a, [g]: false }), {}));
-
-    // --- Dny: poslední pátek před Q + 3 měsíce ---
-    const qDays = [];
-    const qStart = new Date(targetYear, qStartMonth, 1);
-    const prevFriday = new Date(qStart);
-    const dayOfWeek = qStart.getDay();
-    const daysToFriday = dayOfWeek === 0 ? 2 : (dayOfWeek + 2) % 7;
-    prevFriday.setDate(prevFriday.getDate() - daysToFriday);
-
-    for (let d = new Date(prevFriday); d < qStart; d.setDate(d.getDate() + 1)) {
-      qDays.push(d.toLocaleDateString('en-CA'));
-    }
-
-    for (let m = qStartMonth; m < qStartMonth + 3; m++) {
-      const lastDay = new Date(targetYear, m + 1, 0).getDate();
-      for (let i = 1; i <= lastDay; i++) {
-        qDays.push(new Date(targetYear, m, i).toLocaleDateString('en-CA'));
+      // Assignments
+      const assignRef = doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`);
+      const assignSnap = await getDoc(assignRef);
+      if (assignSnap.exists()) {
+        setAssignments(assignSnap.data());
+      } else {
+        setAssignments({});
       }
-    }
+    };
 
-    setDays(qDays);
+    fetchData();
+  }, [currentQOffset, groupOrder, qStartMonth, targetQuarter, targetYear]); // eslint-disable-next-line react-hooks/exhaustive-deps
 
-    const key = `schedule_${targetYear}_Q${targetQuarter}`;
-    const saved = localStorage.getItem(key);
-    if (saved) setAssignments(JSON.parse(saved));
-    else setAssignments({});
-  }, [currentQOffset]);
-
+  // Ukládání assignments
   useEffect(() => {
-    const key = `schedule_${targetYear}_Q${targetQuarter}`;
-    localStorage.setItem(key, JSON.stringify(assignments));
-  }, [assignments, targetYear, targetQuarter]);
+    if (Object.keys(assignments).length === 0) return;
+    const assignRef = doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`);
+    setDoc(assignRef, assignments);
+  }, [assignments, targetQuarter, targetYear]);
 
-  const toggleGroup = (group) => {
-    setCollapsed(prev => ({ ...prev, [group]: !prev[group] }));
-  };
+  const toggleGroup = (group) => setCollapsed(prev => ({ ...prev, [group]: !prev[group] }));
 
   const handleCellClick = (date, user) => {
     const key = `${date}_${user.uid}`;
-    const current = assignments[key];
-    if (current) {
-      const { [key]: _, ...rest } = assignments;
-      setAssignments(rest);
-      window.notify(`${user.shortcut} odebráno`, 'info');
-    } else if (user.groups.length > 0) {
-      setAssignments(prev => ({ ...prev, [key]: user.groups[0] }));
-      window.notify(`${user.shortcut} přiřazeno`, 'success');
-    }
+    setAssignments(prev => {
+      if (prev[key]) {
+        const { [key]: _, ...rest } = prev;
+        window.notify(`${user.shortcut} odebráno`, 'info');
+        return rest;
+      } else {
+        window.notify(`${user.shortcut} přiřazeno`, 'success');
+        return { ...prev, [key]: user.groups[0] };
+      }
+    });
   };
 
   const isWeekendOrHoliday = (date) => {
     const d = new Date(date);
-    const day = d.getDay();
-    const holidays = generateHolidays();
-    return day === 0 || day === 6 || holidays.some(h => h.date === date);
+    return d.getDay() === 0 || d.getDay() === 6 || generateHolidays().some(h => h.date === date);
   };
 
   const getCellClass = (date, user) => {
-    const pref = JSON.parse(localStorage.getItem(`dayStyles_${user.uid}`) || '[]')
-      .find(p => p.date === date)?.status;
-    if (pref === 'not available') return 'not-available';
-    if (pref === 'preferred') return 'preferred';
-    return '';
+    const pref = user.dayStyles?.find(p => p.date === date)?.status || 'available';
+    return pref === 'not available' ? 'not-available' : pref === 'preferred' ? 'preferred' : '';
   };
 
-  // === STATISTIKY S PÁTKY + PRŮMĚREM ===
+  // === STATISTIKY PRO JEDNOTLIVÉ UŽIVATELE ===
   const getStats = (user) => {
-    const userShifts = Object.keys(assignments)
-      .filter(k => k.endsWith(user.uid))
-      .map(k => k.split('_')[0]);
+    let weekday = 0;
+    let fridays = 0;
+    let weekend = 0;
+    let holiday = 0;
 
-    const weekday = userShifts.filter(date => {
-      const d = new Date(date);
-      const day = d.getDay();
-      return day >= 1 && day <= 5;
-    }).length;
+    days.forEach(date => {
+      const key = `${date}_${user.uid}`;
+      if (assignments[key]) {
+        const d = new Date(date);
+        const dayOfWeek = d.getDay();
+        const isFriday = dayOfWeek === 5;
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const isHoliday = generateHolidays().some(h => h.date === date);
 
-    const fridays = userShifts.filter(date => {
-      const d = new Date(date);
-      return d.getDay() === 5;
-    }).length;
+        if (isFriday) fridays++;
+        if (isWeekend) weekend++;
+        if (isHoliday) holiday++;
+        if (!isWeekend && !isHoliday) weekday++;
+      }
+    });
 
-    const weekend = userShifts.filter(date => {
-      const d = new Date(date);
-      const day = d.getDay();
-      return day === 0 || day === 6;
-    }).length;
-
-    const holiday = userShifts.filter(date => {
-      const holidays = generateHolidays();
-      return holidays.some(h => h.date === date);
-    }).length;
-
-    const total = userShifts.length;
-
-    // --- Dlouhodobý průměr pátků ---
-    const statsKey = `fridayStats_${user.uid}`;
-    const yearlyStats = JSON.parse(localStorage.getItem(statsKey) || '{}');
-    const yearKey = targetYear.toString();
-    yearlyStats[yearKey] = (yearlyStats[yearKey] || 0) + fridays;
-    localStorage.setItem(statsKey, JSON.stringify(yearlyStats));
-
-    const totalFridays = Object.values(yearlyStats).reduce((a, b) => a + b, 0);
-    const avgFridays = Object.keys(yearlyStats).length > 0 
-      ? (totalFridays / Object.keys(yearlyStats).length).toFixed(1) 
-      : '—';
+    const total = weekday + fridays + weekend + holiday;
+    const totalFridays = fridays;
+    const avgFridays = days.filter(d => new Date(d).getDay() === 5).length > 0
+      ? (fridays / days.filter(d => new Date(d).getDay() === 5).length * 100).toFixed(1)
+      : '0';
 
     return { weekday, fridays, weekend, holiday, total, totalFridays, avgFridays };
   };
 
+  // Export TSV – zpět!
   const exportToTSV = () => {
-    let tsv = 'Datum\t' + groupOrder.flatMap(g => users[g]?.map(u => u.shortcut) || []).join('\t') + '\n';
+    let tsv = 'Datum\t';
+    groupOrder.forEach(g => {
+      users[g]?.forEach(u => { tsv += `${u.shortcut}\t`; });
+    });
+    tsv = tsv.trim() + '\n';
+
     days.forEach(date => {
       tsv += date + '\t';
       groupOrder.forEach(g => {
         users[g]?.forEach(u => {
-          tsv += (assignments[`${date}_${u.uid}`] ? groupLabel[assignments[`${date}_${u.uid}`]] : '') + '\t';
+          const key = `${date}_${u.uid}`;
+          tsv += (assignments[key] ? groupLabel[assignments[key]] : '') + '\t';
         });
       });
       tsv = tsv.trim() + '\n';
     });
+
     const blob = new Blob([tsv], { type: 'text/tab-separated-values' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `plan_Q${targetQuarter}_${targetYear}.tsv`;
+    a.download = `sluzby_Q${targetQuarter}_${targetYear}.tsv`;
     a.click();
   };
 
@@ -184,7 +175,7 @@ export default function Scheduler() {
               <th>Datum</th>
               {groupOrder.map(group => (
                 users[group] && !collapsed[group] && users[group].map(u => (
-                  <th key={`${u.uid}-${group}`}>{u.shortcut}</th>
+                  <th key={u.uid}>{u.shortcut}</th>
                 ))
               ))}
             </tr>
@@ -196,13 +187,11 @@ export default function Scheduler() {
                 {groupOrder.map(group => (
                   users[group] && !collapsed[group] && users[group].map(u => (
                     <td
-                      key={`${u.uid}-${group}`}
+                      key={u.uid}
                       className={getCellClass(date, u)}
                       onClick={() => handleCellClick(date, u)}
                     >
-                      {assignments[`${date}_${u.uid}`]
-                        ? groupLabel[assignments[`${date}_${u.uid}`]] || ''
-                        : ''}
+                      {assignments[`${date}_${u.uid}`] ? groupLabel[assignments[`${date}_${u.uid}`]] : ''}
                     </td>
                   ))
                 ))}
@@ -213,7 +202,6 @@ export default function Scheduler() {
       </div>
 
       <div className="right-column">
-        {/* TLAČÍTKA SKUPIN */}
         <div className="group-buttons">
           {groupOrder.map(group => (
             <button
@@ -226,7 +214,6 @@ export default function Scheduler() {
           ))}
         </div>
 
-        {/* NAVIGACE Q + EXPORT */}
         <div className="q-nav">
           <button onClick={() => setCurrentQOffset(prev => prev - 1)}>Předchozí Q</button>
           <span>Q{targetQuarter} {targetYear}</span>
@@ -234,7 +221,7 @@ export default function Scheduler() {
           <button onClick={exportToTSV}>Export TSV</button>
         </div>
 
-        {/* STATISTIKY – ČISTÁ TABULKA */}
+        <h3>Statistiky</h3>
         {groupOrder.map(group => (
           users[group] && !collapsed[group] && (
             <div key={group} className="stats-table-block">

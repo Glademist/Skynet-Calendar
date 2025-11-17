@@ -3,11 +3,14 @@ import { auth, googleProvider } from './firebase';
 import { signInWithPopup } from 'firebase/auth';
 import './styles/login.css';
 
-export default function Login({ onLogin }) {
-  const handleGoogle = () => {
-    signInWithPopup(auth, googleProvider)
-      .then(result => onLogin(result.user))
-      .catch(err => alert(err.message));
+export default function Login() {
+  const handleGoogle = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      // Firebase auth listener v App.js už to zachytí → nic dalšího není potřeba
+    } catch (err) {
+      alert('Přihlášení selhalo: ' + err.message);
+    }
   };
 
   return (

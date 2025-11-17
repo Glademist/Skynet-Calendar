@@ -1,27 +1,12 @@
 // src/AdminPanel.js
 import React, { useState, useEffect } from 'react';
+import { db } from './firebase';
+import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
 
-const exportAllData = () => {
-  const data = {
-    users: {},
-    assignments: {},
-    preferences: {}
-  };
-
-  Object.keys(localStorage).forEach(key => {
-    if (key.startsWith('settings_')) {
-      const uid = key.split('_')[1];
-      data.users[uid] = JSON.parse(localStorage.getItem(key));
-    }
-    if (key.startsWith('schedule_')) {
-      data.assignments[key] = JSON.parse(localStorage.getItem(key));
-    }
-    if (key.startsWith('dayStyles_')) {
-      const uid = key.split('_')[1];
-      data.preferences[uid] = JSON.parse(localStorage.getItem(key));
-    }
-  });
-
+const exportAllData = async () => {
+  const snapshot = await getDocs(collection(db, 'settings'));
+  const users = snapshot.docs.map(d => ({ uid: d.id, ...d.data() }));
+  const data = { users, assignments: {}, preferences: {} }; // assignments můžeš doplnit
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -30,102 +15,49 @@ const exportAllData = () => {
   a.click();
 };
 
-const approveUser = (uid, setUsers) => {
-  const settings = JSON.parse(localStorage.getItem(`settings_${uid}`));
-  settings.approved = true;
-  localStorage.setItem(`settings_${uid}`, JSON.stringify(settings));
-  window.notify(`Uživatel ${settings.shortcut} schválen`, 'success');
-
-  // Aktualizuj stav
-  setUsers(prev => prev.map(u => u.uid === uid ? { ...u, approved: true } : u));
-};
-
 export default function AdminPanel() {
   const [users, setUsers] = useState([]);
 
   useEffect(() => {
-    const allKeys = Object.keys(localStorage);
-    const userKeys = allKeys.filter(k => k.startsWith('settings_'));
-    const userData = userKeys.map(key => {
-      const uid = key.split('_')[1];
-      const settings = JSON.parse(localStorage.getItem(key));
-      const userStr = localStorage.getItem('user');
-      let email = '', name = '';
-      if (userStr) {
-        const u = JSON.parse(userStr);
-        if (u.uid === uid) {
-          email = u.email;
-          name = u.name;
-        }
-      }
-      return { ...settings, email, name, uid, approved: settings.approved || false };
-    });
-    setUsers(userData);
+    const fetch = async () => {
+      const snap = await getDocs(collection(db, 'settings'));
+      setUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() })));
+    };
+    fetch();
   }, []);
+
+  const approve = async (uid) => {
+    await updateDoc(doc(db, 'settings', uid), { approved: true });
+    setUsers(prev => prev.map(u => u.uid === uid ? { ...u, approved: true } : u));
+  };
+
+  const changeShortcut = async (uid, val) => {
+    if (!val) return;
+    await updateDoc(doc(db, 'settings', uid), { shortcut: val });
+    setUsers(prev => prev.map(u => u.uid === uid ? { ...u, shortcut: val } : u));
+  };
 
   return (
     <div className="admin-panel">
-      <h2>Admin přehled uživatelů</h2>
+      <h2>Admin přehled</h2>
       <table className="admin-table">
         <thead>
-          <tr>
-            <th>Zkratka</th>
-            <th>Jméno</th>
-            <th>Příjmení</th>
-            <th>Email</th>
-            <th>Skupiny</th>
-            <th>Všední</th>
-            <th>Víkendy</th>
-            <th>Interval</th>
-          </tr>
+          <tr><th>Zkratka</th><th>Jméno</th><th>Email</th><th>Skupiny</th><th>Schváleno</th><th>Akce</th></tr>
         </thead>
         <tbody>
           {users.map(u => (
             <tr key={u.uid}>
-              <td>{u.shortcut}</td>
-              <td>{u.firstName}</td>
-              <td>{u.lastName}</td>
-              <td>{u.email}</td>
-              <td>{u.groups?.join(', ') || ''}</td>
-              <td>{u.weekdayShifts}</td>
-              <td>{u.weekendShifts}</td>
-              <td>{u.shiftInterval}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h3>Uživatelé ke schválení</h3>
-      <table className="users-table">
-        <thead>
-          <tr>
-            <th>Jméno</th>
-            <th>Zkratka</th>
-            <th>Email</th>
-            <th>Schváleno</th>
-            <th>Akce</th>
-          </tr>
-        </thead>
-        <tbody>
-          {users.map(u => (
-            <tr key={u.uid}>
+              <td><input value={u.shortcut || ''} onChange={e => changeShortcut(u.uid, e.target.value)} style={{width:60}} /></td>
               <td>{u.firstName} {u.lastName}</td>
-              <td>{u.shortcut}</td>
               <td>{u.email}</td>
+              <td>{u.groups?.join(', ')}</td>
               <td>{u.approved ? '✓' : '✗'}</td>
-              <td>
-                {!u.approved && (
-                  <button onClick={() => approveUser(u.uid, setUsers)}>Schválit</button>
-                )}
-              </td>
+              <td>{!u.approved && <button onClick={() => approve(u.uid)}>Schválit</button>}</td>
             </tr>
           ))}
         </tbody>
       </table>
-
-      <button onClick={exportAllData} className="export-btn">
-        Exportovat vše (JSON)
-      </button>
+      <button onClick={exportAllData}>Exportovat vše (JSON)</button>
     </div>
   );
 }
