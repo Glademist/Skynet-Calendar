@@ -1,16 +1,14 @@
+// src/Login.js
 import React from 'react';
 import { auth, googleProvider } from './firebase';
 import { signInWithPopup } from 'firebase/auth';
 import './styles/login.css';
 
 export default function Login() {
-  const handleGoogle = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-      // Firebase auth listener v App.js už to zachytí → nic dalšího není potřeba
-    } catch (err) {
-      alert('Přihlášení selhalo: ' + err.message);
-    }
+  const handleGoogle = () => {
+    signInWithPopup(auth, googleProvider).catch(err => {
+      window.notify('Přihlášení selhalo: ' + err.message, 'error');
+    });
   };
 
   return (

@@ -11,6 +11,7 @@ import NotificationBar from './NotificationBar';
 import { auth, db } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { getRedirectResult } from 'firebase/auth';
 import './App.css';
 
 // Easter calculation
@@ -76,7 +77,7 @@ function App() {
 
   // Load user & choices
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
         const cleanUser = {
           uid: firebaseUser.uid,
@@ -87,34 +88,41 @@ function App() {
           picture: firebaseUser.photoURL
         };
         setUser(cleanUser);
-
-        // 1. Načti nastavení (settings)
-        const settingsRef = doc(db, 'settings', firebaseUser.uid);
-        const settingsSnap = await getDoc(settingsRef);
-
-        if (!settingsSnap.exists()) {
-          setView('settings');
-        } else {
-          setView('calendar');
-        }
-
-        // 2. Načti dayStyles (označené dny v kalendáři)
-        const stylesRef = doc(db, 'dayStyles', firebaseUser.uid);
-        const stylesSnap = await getDoc(stylesRef);
-        if (stylesSnap.exists() && stylesSnap.data().styles) {
-          setDayStyles(stylesSnap.data().styles);
-        } else {
-          setDayStyles([]); // žádné označené dny
-        }
-
+        setView('calendar'); // ← vždy rovnou do kalendáře (nastavení už mají)
       } else {
         setUser(null);
-        setView('calendar');
-        setDayStyles([]);
       }
     });
 
     return () => unsubscribe();
+  }, []); // ← jen jednou
+
+  // Načítání dayStyles z Firestore
+  useEffect(() => {
+    if (user) {
+      const loadDayStyles = async () => {
+        const stylesRef = doc(db, 'dayStyles', user.uid);
+        const snap = await getDoc(stylesRef);
+        if (snap.exists() && snap.data().styles) {
+          setDayStyles(snap.data().styles);
+        } else {
+          setDayStyles([]);
+        }
+      };
+      loadDayStyles();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    // Po redirectu z Google – vynutíme refresh stavu
+    const checkRedirect = async () => {
+      const result = await getRedirectResult(auth);
+      if (result?.user) {
+        // Uživatel je přihlášený – vynutíme přepnutí
+        window.location.reload();
+      }
+    };
+    checkRedirect();
   }, []);
 
   // Save styles per user
