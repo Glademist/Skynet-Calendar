@@ -76,6 +76,12 @@ export default function Settings({ user, onSave }) {
 
       window.notify('Nastavení uloženo', 'success');
       onSave?.();
+      // Skryj hlášku, že nastavení chybí
+      if (window.showSettingsWarning) {
+        window.showSettingsWarning = false;
+        // vynutíme refresh hlášky v App.js
+        window.dispatchEvent(new Event('settingsSaved'));
+      }
     } catch (err) {
       window.notify('Chyba: ' + err.message, 'error');
     }

@@ -1,7 +1,15 @@
+// src/Scheduler.js
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from './firebase';
 import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { generateHolidays } from './utils';
+
+// ← NOVÉ: Pořadí lékařů
+const doctorOrder = [
+  'Hro', 'Hv', 'ValM', 'Bee', 'Chre', 'Šk', 'Šd', 'Bia', 'Ble', 'Har',
+  'Koc', 'Brz', 'Dvo', 'Sib', 'Sal', 'Žd', 'ValJ', 'MarB', 'Pli',
+  'Mud', 'Kul', 'Hru', 'Pro', 'Kep', 'Švr', 'Mrk'
+];
 
 export default function Scheduler() {
   const [currentQOffset, setCurrentQOffset] = useState(1);
@@ -9,6 +17,7 @@ export default function Scheduler() {
   const [collapsed, setCollapsed] = useState({});
   const [assignments, setAssignments] = useState({});
   const [days, setDays] = useState([]);
+  const [userPreferences, setUserPreferences] = useState({});
 
   const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
   const groupLabel = { 'staří': 'S', 'střední': 'M', 'mladí': 'J' };
@@ -19,7 +28,7 @@ export default function Scheduler() {
   const targetYear = currentQuarter + currentQOffset > 4 ? today.getFullYear() + 1 : today.getFullYear();
   const qStartMonth = (targetQuarter - 1) * 3;
 
-  // Načítání uživatelů + assignments
+  // Načítání uživatelů + assignments + preference všech
   useEffect(() => {
     const fetchData = async () => {
       // Uživatelé
@@ -41,6 +50,22 @@ export default function Scheduler() {
 
       setUsers(sortedGroups);
       setCollapsed(Object.keys(sortedGroups).reduce((a, g) => ({ ...a, [g]: false }), {}));
+
+      // Preference všech uživatelů
+      const prefs = {};
+      for (const group of Object.values(sortedGroups)) {
+        for (const u of group) {
+          const prefRef = doc(db, 'dayStyles', u.uid);
+          const prefSnap = await getDoc(prefRef);
+          if (prefSnap.exists()) {
+            const styles = prefSnap.data().styles || [];
+            prefs[u.uid] = Object.fromEntries(styles.map(s => [s.date, s.status]));
+          } else {
+            prefs[u.uid] = {};
+          }
+        }
+      }
+      setUserPreferences(prefs);
 
       // Dny kvartálu
       const qDays = [];
@@ -74,7 +99,6 @@ export default function Scheduler() {
     fetchData();
   }, [currentQOffset, groupOrder, qStartMonth, targetQuarter, targetYear]); // eslint-disable-next-line react-hooks/exhaustive-deps
 
-  // Ukládání assignments
   useEffect(() => {
     if (Object.keys(assignments).length === 0) return;
     const assignRef = doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`);
@@ -103,57 +127,51 @@ export default function Scheduler() {
   };
 
   const getCellClass = (date, user) => {
-    const pref = user.dayStyles?.find(p => p.date === date)?.status || 'available';
-    return pref === 'not available' ? 'not-available' : pref === 'preferred' ? 'preferred' : '';
+    const pref = userPreferences[user.uid]?.[date];
+    if (pref === 'not available') return 'pref-not-available';
+    if (pref === 'preferred') return 'pref-preferred';
+    return '';
   };
 
-  // === STATISTIKY PRO JEDNOTLIVÉ UŽIVATELE ===
-  const getStats = (user) => {
-    let weekday = 0;
-    let fridays = 0;
-    let weekend = 0;
-    let holiday = 0;
+  // ← NOVÉ: Unikátní seznam viditelných uživatelů (bez duplicit + správné pořadí)
+  const visibleUsers = useMemo(() => {
+    const seen = new Set();
+    const list = [];
 
-    days.forEach(date => {
-      const key = `${date}_${user.uid}`;
-      if (assignments[key]) {
-        const d = new Date(date);
-        const dayOfWeek = d.getDay();
-        const isFriday = dayOfWeek === 5;
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-        const isHoliday = generateHolidays().some(h => h.date === date);
-
-        if (isFriday) fridays++;
-        if (isWeekend) weekend++;
-        if (isHoliday) holiday++;
-        if (!isWeekend && !isHoliday) weekday++;
+    groupOrder.forEach(group => {
+      if (!collapsed[group] && users[group]) {
+        users[group].forEach(u => {
+          if (!seen.has(u.uid)) {
+            seen.add(u.uid);
+            list.push(u);
+          }
+        });
       }
     });
 
-    const total = weekday + fridays + weekend + holiday;
-    const totalFridays = fridays;
-    const avgFridays = days.filter(d => new Date(d).getDay() === 5).length > 0
-      ? (fridays / days.filter(d => new Date(d).getDay() === 5).length * 100).toFixed(1)
-      : '0';
+    // Seřadíme podle doctorOrder
+    list.sort((a, b) => {
+      const aPos = doctorOrder.indexOf(a.shortcut);
+      const bPos = doctorOrder.indexOf(b.shortcut);
+      if (aPos === -1 && bPos === -1) return a.shortcut.localeCompare(b.shortcut);
+      if (aPos === -1) return 1;
+      if (bPos === -1) return -1;
+      return aPos - bPos;
+    });
 
-    return { weekday, fridays, weekend, holiday, total, totalFridays, avgFridays };
-  };
+    return list;
+}, [users, collapsed, groupOrder]);
 
-  // Export TSV – zpět!
   const exportToTSV = () => {
     let tsv = 'Datum\t';
-    groupOrder.forEach(g => {
-      users[g]?.forEach(u => { tsv += `${u.shortcut}\t`; });
-    });
+    visibleUsers.forEach(u => tsv += `${u.shortcut}\t`);
     tsv = tsv.trim() + '\n';
 
     days.forEach(date => {
       tsv += date + '\t';
-      groupOrder.forEach(g => {
-        users[g]?.forEach(u => {
-          const key = `${date}_${u.uid}`;
-          tsv += (assignments[key] ? groupLabel[assignments[key]] : '') + '\t';
-        });
+      visibleUsers.forEach(u => {
+        const key = `${date}_${u.uid}`;
+        tsv += (assignments[key] ? groupLabel[assignments[key]] : '') + '\t';
       });
       tsv = tsv.trim() + '\n';
     });
@@ -166,6 +184,8 @@ export default function Scheduler() {
     a.click();
   };
 
+  const getStats = (user) => ({ weekday: 0, fridays: 0, weekend: 0, holiday: 0, total: 0, totalFridays: 0, avgFridays: 0 });
+
   return (
     <div className="scheduler-layout">
       <div className="left-column">
@@ -173,10 +193,8 @@ export default function Scheduler() {
           <thead className="fixed-header">
             <tr>
               <th>Datum</th>
-              {groupOrder.map(group => (
-                users[group] && !collapsed[group] && users[group].map(u => (
-                  <th key={u.uid}>{u.shortcut}</th>
-                ))
+              {visibleUsers.map(u => (
+                <th key={u.uid}>{u.shortcut}</th>
               ))}
             </tr>
           </thead>
@@ -184,16 +202,16 @@ export default function Scheduler() {
             {days.map(date => (
               <tr key={date} className={isWeekendOrHoliday(date) ? 'special-day' : ''}>
                 <td>{date}</td>
-                {groupOrder.map(group => (
-                  users[group] && !collapsed[group] && users[group].map(u => (
-                    <td
-                      key={u.uid}
-                      className={getCellClass(date, u)}
-                      onClick={() => handleCellClick(date, u)}
-                    >
-                      {assignments[`${date}_${u.uid}`] ? groupLabel[assignments[`${date}_${u.uid}`]] : ''}
-                    </td>
-                  ))
+                {visibleUsers.map(u => (
+                  <td
+                    key={u.uid}
+                    className={getCellClass(date, u)}
+                    onClick={() => handleCellClick(date, u)}
+                  >
+                    {assignments[`${date}_${u.uid}`]
+                      ? groupLabel[assignments[`${date}_${u.uid}`]]
+                      : ''}
+                  </td>
                 ))}
               </tr>
             ))}

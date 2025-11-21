@@ -37,6 +37,18 @@ export default function AdminPanel() {
     setUsers(prev => prev.map(u => u.uid === uid ? { ...u, shortcut: val } : u));
   };
 
+  const updateGroups = async (uid, newGroups) => {
+    try {
+      await updateDoc(doc(db, 'settings', uid), { groups: newGroups });
+      setUsers(prev => prev.map(u => 
+        u.uid === uid ? { ...u, groups: newGroups } : u
+      ));
+    } catch (err) {
+      console.error('Chyba při ukládání skupin:', err);
+      alert('Nepodařilo se uložit skupiny – zkus znovu');
+    }
+  };
+
   return (
     <div className="admin-panel">
       <h2>Admin přehled</h2>
@@ -50,7 +62,23 @@ export default function AdminPanel() {
               <td><input value={u.shortcut || ''} onChange={e => changeShortcut(u.uid, e.target.value)} style={{width:60}} /></td>
               <td>{u.firstName} {u.lastName}</td>
               <td>{u.email}</td>
-              <td>{u.groups?.join(', ')}</td>
+              <td>
+                {['staří', 'střední', 'mladí'].map(g => (
+                  <label key={g} style={{ marginRight: '10px', fontSize: '0.9em' }}>
+                    <input
+                      type="checkbox"
+                      checked={u.groups?.includes(g) || false}
+                      onChange={(e) => {
+                        const newGroups = e.target.checked
+                          ? [...(u.groups || []).filter(x => x !== g), g]
+                          : (u.groups || []).filter(x => x !== g);
+                        updateGroups(u.uid, newGroups);
+                      }}
+                    />
+                    {g}
+                  </label>
+                ))}
+              </td>
               <td>{u.approved ? '✓' : '✗'}</td>
               <td>{!u.approved && <button onClick={() => approve(u.uid)}>Schválit</button>}</td>
             </tr>

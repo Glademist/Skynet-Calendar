@@ -410,6 +410,16 @@ SCHEDULER
   font-weight: 700;
 }
 
+.pref-not-available {
+  background-color: #5c5c5c !important;
+  opacity: 0.6;
+}
+
+.pref-preferred {
+  background-color: #d4edda !important;
+  border: 2px solid #126826;
+}
+
 .not-available { background: #f8d7da; cursor: not-allowed; }
 .preferred { background: #d4edda; }
 

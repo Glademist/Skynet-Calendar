@@ -69,16 +69,44 @@ const generateHolidays = () => {
   return holidays;
 };
 
+// Load user & choices
+const allowedEmails = [
+  "skaryd81@gmail.com", "david.kulisiak@gmail.com", "valenta.jiri.92@gmail.com",
+  "fidusmax@gmail.com", "palo.dotore@gmail.com", "verybery331@gmail.com",
+  "gaalka@me.com", "rgaalova@gmail.com", "jiri.graphy@gmail.com",
+  "krejm6ar@gmail.com", "pandvorak87@gmail.com", "tomasprochazka96@gmail.com",
+  "kl.pliskova@gmail.com", "inovec.ph@gmail.com", "surrogatereplacement@gmail.com",
+  "lidakoyuda@gmail.com", "martina.kepicova@gmail.com", "dave8srpen@gmail.com",
+  "vasek.salavec@gmail.com", "veronika.kavalkova@gmail.com", "zdenekhavlik9@gmail.com",
+  "zdenek.havlik@nemlib.cz", "jansibera88@gmail.com", "nmarkovicka@gmail.com",
+  "mudrakdominik@gmail.com", "durnovalida@gmail.com", "maresobarb@gmail.com",
+  "jiri.skach@gmail.com", "vojtech.hruby.jc@gmail.com", "pepazdepa.324@gmail.com",
+  "dr.zdarska@gmail.com", "kocmanova.ka@gmail.com", "brzulova.lucie@gmail.com",
+  "chirurggg@gmail.com"
+].map(e => e.toLowerCase());
+
 function App() {
   const [user, setUser] = useState(null);
   const [dayStyles, setDayStyles] = useState([]);
+  const [showSettingsWarning, setShowSettingsWarning] = useState(false);
   const [view, setView] = useState('calendar'); // 'calendar' or 'settings'
   const holidays = generateHolidays();
 
-  // Load user & choices
+// Opravený useEffect s auth (přidej allowedEmails do dependency)
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
+        const email = firebaseUser.email.toLowerCase();
+
+        if (!allowedEmails.includes(email)) {
+          setUser(null);
+          setView('blocked');
+          localStorage.setItem('blocked_email', firebaseUser.email);
+          return;
+        }
+
+        localStorage.removeItem('blocked_email');
+
         const cleanUser = {
           uid: firebaseUser.uid,
           email: firebaseUser.email,
@@ -88,14 +116,27 @@ function App() {
           picture: firebaseUser.photoURL
         };
         setUser(cleanUser);
-        setView('calendar'); // ← vždy rovnou do kalendáře (nastavení už mají)
+
+        // Kontrola nastavení
+        const settingsRef = doc(db, 'settings', firebaseUser.uid);
+        const settingsSnap = await getDoc(settingsRef);
+        setShowSettingsWarning(!settingsSnap.exists());
+
+        // Načti dayStyles atd...
+        const stylesRef = doc(db, 'dayStyles', firebaseUser.uid);
+        const stylesSnap = await getDoc(stylesRef);
+        setDayStyles(stylesSnap.exists() ? (stylesSnap.data().styles || []) : []);
+
+        setView('calendar');
       } else {
         setUser(null);
+        setShowSettingsWarning(false);
+        setDayStyles([]);
       }
     });
 
     return () => unsubscribe();
-  }, []); // ← jen jednou
+  }, []); // allowedEmails je teď konstanta mimo useEffect → ESLint spokojený
 
   // Načítání dayStyles z Firestore
   useEffect(() => {
@@ -125,6 +166,13 @@ function App() {
     checkRedirect();
   }, []);
 
+  // Listener na uložení nastavení (zůstává)
+  useEffect(() => {
+    const handler = () => setShowSettingsWarning(false);
+    window.addEventListener('settingsSaved', handler);
+    return () => window.removeEventListener('settingsSaved', handler);
+  }, []);
+
   // Save styles per user
   useEffect(() => {
     if (user && dayStyles.length > 0) {
@@ -132,7 +180,7 @@ function App() {
     }
   }, [dayStyles, user]);
 
-  const handleDateClick = async (arg) => {
+    const handleDateClick = async (arg) => {
     if (!user) return;
 
     const dateStr = arg.date.toLocaleDateString('en-CA');
@@ -208,6 +256,30 @@ function App() {
       </div>
 
       <div className="main-content">
+        {showSettingsWarning && (
+          <div style={{
+            background: '#d32f2f',
+            color: 'white',
+            padding: '15px',
+            textAlign: 'center',
+            fontSize: '1.3em',
+            fontWeight: 'bold',
+            position: 'sticky',
+            top: 0,
+            zIndex: 1000
+          }}>
+            ⚠️ DOKONČETE PROSÍM SVÁ NASTAVENÍ! 
+            <button 
+              onClick={() => setView('settings')}
+              style={{ marginLeft: '15px', background: 'white', color: '#d32f2f', padding: '8px 16px', border: 'none', borderRadius: '4px', fontWeight: 'bold' }}
+            >
+              Přejít na Nastavení →
+            </button>
+            <div style={{fontSize: '0.9em', marginTop: '8px'}}>
+              Dokud nastavení neuložíte, neobjevíte se v rozpisu služeb.
+            </div>
+          </div>
+        )}
         {view === 'calendar' && (
           <FullCalendar
             plugins={[dayGridPlugin, interactionPlugin]}
@@ -250,6 +322,34 @@ function App() {
         )}
         {view === 'scheduler' && isAdmin && <Scheduler />}
         {view === 'admin' && isAdmin && <AdminPanel />}
+        {view === 'blocked' && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, width: '100%', height: '100%',
+          background: 'rgba(220, 53, 69, 0.98)',
+          color: 'white',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 9999,
+          fontSize: '1.5em',
+          textAlign: 'center',
+          padding: '20px'
+        }}>
+          <h1>POZOR – NEOČEKÁVANÝ EMAIL!</h1>
+          <p><strong>{localStorage.getItem('blocked_email')}</strong></p>
+          <p>Tento email není v seznamu povolených uživatelů.</p>
+          <p><strong>Data se NEULOŽÍ a budou ztracena!</strong></p>
+          <p>Odhlaste se a přihlaste se pod správným Google účtem nebo volejte.</p>
+          <button 
+            onClick={() => signOut(auth)} 
+            style={{padding: '15px 30px', fontSize: '1.2em', marginTop: '20px'}}
+          >
+            Odhlásit se
+          </button>
+        </div>
+      )}
         <NotificationBar />
       </div>
     </div>
