@@ -12,7 +12,7 @@ import { auth, db } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { getRedirectResult } from 'firebase/auth';
-import './App.css';
+import './App.css'
 
 // Easter calculation
 const getEasterSunday = (year) => {
@@ -91,22 +91,12 @@ function App() {
   const [showSettingsWarning, setShowSettingsWarning] = useState(false);
   const [view, setView] = useState('calendar'); // 'calendar' or 'settings'
   const holidays = generateHolidays();
+  const [isApproved, setIsApproved] = useState(true); // výchozí true, aby se nezobrazil hned
 
 // Opravený useEffect s auth (přidej allowedEmails do dependency)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        const email = firebaseUser.email.toLowerCase();
-
-        if (!allowedEmails.includes(email)) {
-          setUser(null);
-          setView('blocked');
-          localStorage.setItem('blocked_email', firebaseUser.email);
-          return;
-        }
-
-        localStorage.removeItem('blocked_email');
-
         const cleanUser = {
           uid: firebaseUser.uid,
           email: firebaseUser.email,
@@ -116,27 +106,38 @@ function App() {
           picture: firebaseUser.photoURL
         };
         setUser(cleanUser);
+        const docRef = doc(db, 'settings', firebaseUser.uid);
+        const docSnap = await getDoc(docRef);
 
-        // Kontrola nastavení
-        const settingsRef = doc(db, 'settings', firebaseUser.uid);
-        const settingsSnap = await getDoc(settingsRef);
-        setShowSettingsWarning(!settingsSnap.exists());
+        const email = firebaseUser.email.toLowerCase();
+        if (!allowedEmails.includes(email)) {
+          setUser(null);
+          setView('blocked');
+          localStorage.setItem('blocked_email', firebaseUser.email);
+          return;
+        }
+        const settingsSnap = await getDoc(docRef); // už máš docRef
+        setIsApproved(settingsSnap.data()?.approved || false);
 
-        // Načti dayStyles atd...
+        if (!docSnap.exists()) {
+          setView('settings');
+        } else {
+          setView('calendar');
+        }
+
+        // Načti dayStyles
         const stylesRef = doc(db, 'dayStyles', firebaseUser.uid);
         const stylesSnap = await getDoc(stylesRef);
-        setDayStyles(stylesSnap.exists() ? (stylesSnap.data().styles || []) : []);
-
-        setView('calendar');
+        setDayStyles(stylesSnap.exists() ? stylesSnap.data().styles : []);
       } else {
         setUser(null);
-        setShowSettingsWarning(false);
+        setView('calendar');
         setDayStyles([]);
       }
     });
 
     return () => unsubscribe();
-  }, []); // allowedEmails je teď konstanta mimo useEffect → ESLint spokojený
+  }, []);
 
   // Načítání dayStyles z Firestore
   useEffect(() => {
@@ -217,29 +218,29 @@ function App() {
   const isAdmin = user?.email === 'skaryd81@gmail.com';
 
   return (
-    <div className="App">
-        <div className="header">
-          <nav className="nav-menu">
+    <div className="app-layout">
+        <div className="app-header">
+          <nav className="app-navMenu">
             <button
-              className={view === 'calendar' ? 'nav-active' : ''}
+              className={view === 'calendar' ? "app-navActive" : ''}
               onClick={() => setView('calendar')}
             >
               Kalendář
             </button>
             <button
-              className={view === 'settings' ? 'nav-active' : ''}
+              className={view === 'settings' ? "app-navActive" : ''}
               onClick={() => setView('settings')}
             >
               Nastavení
             </button>
             {isAdmin && (
-              <button className={view === 'scheduler' ? 'nav-active' : ''} onClick={() => setView('scheduler')}>
+              <button className={view === 'scheduler' ? "app-navActive" : ''} onClick={() => setView('scheduler')}>
                 Plánovač
               </button>
             )}            
             {isAdmin && (
               <button
-                className={view === 'admin' ? 'nav-active' : ''}
+                className={view === 'admin' ? "app-navActive" : ''}
                 onClick={() => setView('admin')}
               >
                 Admin
@@ -247,27 +248,17 @@ function App() {
             )}
           </nav>
 
-        <div className="user-info">
-          <span className="user-name">{user.name}</span>
-          <button className="logout-btn" onClick={handleLogout}>
+        <div className="app-userInfo">
+          <span className="app-userName">{user.name}</span>
+          <button className="app-logoutBtn" onClick={handleLogout}>
             Odhlásit
           </button>
         </div>
       </div>
 
-      <div className="main-content">
+      <div className="app-mainContent">
         {showSettingsWarning && (
-          <div style={{
-            background: '#d32f2f',
-            color: 'white',
-            padding: '15px',
-            textAlign: 'center',
-            fontSize: '1.3em',
-            fontWeight: 'bold',
-            position: 'sticky',
-            top: 0,
-            zIndex: 1000
-          }}>
+          <div className="app-settingsWarning">
             ⚠️ DOKONČETE PROSÍM SVÁ NASTAVENÍ! 
             <button 
               onClick={() => setView('settings')}
@@ -275,17 +266,19 @@ function App() {
             >
               Přejít na Nastavení →
             </button>
-            <div style={{fontSize: '0.9em', marginTop: '8px'}}>
+            <div className="app-subtext">
               Dokud nastavení neuložíte, neobjevíte se v rozpisu služeb.
             </div>
           </div>
         )}
         {view === 'calendar' && (
+          <div className="app-calendarContainer">  {/* ← NOVÝ WRAPPER */}
           <FullCalendar
             plugins={[dayGridPlugin, interactionPlugin]}
             initialView="dayGridMonth"
             firstDay={1}
             height="100%"
+            contentHeight="100%"
             fixedWeekCount={false}
             locales={[csLocale]}
             locale="cs"
@@ -303,43 +296,38 @@ function App() {
               const dateStr = arg.date.toLocaleDateString('en-CA');
               const holiday = holidays.find(h => h.date === dateStr);
               const holidayHtml = holiday
-                ? `<div class="holiday-label">${holiday.title}</div>`
+                ? `<div class="app-holidayLabel">${holiday.title}</div>`
                 : '';
               return {
                 html: `
-                  <div class="day-content">
-                    <div class="day-number">${arg.dayNumberText}</div>
+                  <div class="app-dayContent">
+                    <div class="app-dayNumber">${arg.dayNumberText}</div>
                     ${holidayHtml}
                   </div>
                 `
               };
             }}
           />
+          </div>
         )}
 
         {view === 'settings' && (
           <Settings user={user} onSave={() => setView('calendar')} />
         )}
-        {view === 'scheduler' && isAdmin && <Scheduler />}
+        {view === 'scheduler' && isAdmin && (
+          <div className="scheduler-container">  {/* ← NOVÝ WRAPPER */}
+          <Scheduler />
+          </div>
+          )}
         {view === 'admin' && isAdmin && <AdminPanel />}
         {view === 'blocked' && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, width: '100%', height: '100%',
-          background: 'rgba(220, 53, 69, 0.98)',
-          color: 'white',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 9999,
-          fontSize: '1.5em',
-          textAlign: 'center',
-          padding: '20px'
-        }}>
+        <div className="app-blockedEmail">
           <h1>POZOR – NEOČEKÁVANÝ EMAIL!</h1>
           <p><strong>{localStorage.getItem('blocked_email')}</strong></p>
           <p>Tento email není v seznamu povolených uživatelů.</p>
+          <div className="app-blockedEmail">
+            {localStorage.getItem('blocked_email')}
+          </div>
           <p><strong>Data se NEULOŽÍ a budou ztracena!</strong></p>
           <p>Odhlaste se a přihlaste se pod správným Google účtem nebo volejte.</p>
           <button 
@@ -349,7 +337,16 @@ function App() {
             Odhlásit se
           </button>
         </div>
-      )}
+        )}
+        {user && !isApproved && view !== 'blocked' && (
+          <div className="app-approvalWarning">
+            ⚠️ Váš účet čeká na schválení adminem!
+            <br/>
+            <small style={{fontSize: '0.9em', opacity: 0.9}}>
+              Prosím, počkejte na schválení. Do té doby nemůžete plánovat služby.
+            </small>
+          </div>
+        )}
         <NotificationBar />
       </div>
     </div>

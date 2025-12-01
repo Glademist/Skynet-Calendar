@@ -1,11 +1,13 @@
+// src/components/Settings.js
 import React, { useState, useEffect } from 'react';
 import { SHORTCUTS } from './constants';
 import { db } from './firebase';
-import { doc, setDoc, getDoc } from 'firebase/firestore';   // ← přidej getDoc
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import './Settings.css';
 
 const allGroups = ['staří', 'střední', 'mladí'];
 
-export default function Settings({ user, onSave }) {
+export default function Settings({ user, onSave, adminEditMode }) {
   const [form, setForm] = useState({
     firstName: '',
     lastName: '',
@@ -15,36 +17,28 @@ export default function Settings({ user, onSave }) {
     shiftInterval: 7,
     groups: []
   });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
-  // Načítání z Firestore (nejdřív), pak fallback na localStorage (pro stará data)
+  const targetUid = adminEditMode?.uid || user.uid;
+
   useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const docRef = doc(db, 'settings', user.uid);
-        const docSnap = await getDoc(docRef);
-
-        if (docSnap.exists()) {
-          setForm(docSnap.data());
-        } else {
-          // Fallback na localStorage (pro stará data)
-          const saved = localStorage.getItem(`settings_${user.uid}`);
-          if (saved) {
-            setForm(JSON.parse(saved));
-          } else {
-            // Výchozí hodnoty z Google účtu
-            const firstName = user.given_name || '';
-            const lastName = user.family_name || '';
-            const shortcut = (firstName.charAt(0) + lastName.charAt(0)).toUpperCase();
-            setForm(prev => ({ ...prev, firstName, lastName, shortcut }));
-          }
-        }
-      } catch (err) {
-        console.error('Chyba při načítání nastavení:', err);
+    const load = async () => {
+      const ref = doc(db, 'settings', targetUid);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        setForm(snap.data());
+      } else {
+        setForm(prev => ({
+          ...prev,
+          firstName: user.given_name || '',
+          lastName: user.family_name || '',
+          shortcut: (user.given_name?.[0] + user.family_name?.[0])?.toUpperCase() || ''
+        }));
       }
     };
-
-    loadSettings();
-  }, [user]);
+    load();
+  }, [targetUid, user]);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -52,8 +46,8 @@ export default function Settings({ user, onSave }) {
       setForm(prev => ({
         ...prev,
         groups: checked
-          ? [...prev.groups, value]
-          : prev.groups.filter(g => g !== value)
+          ? [...prev.groups, name]
+          : prev.groups.filter(g => g !== name)
       }));
     } else {
       setForm(prev => ({ ...prev, [name]: value }));
@@ -62,45 +56,50 @@ export default function Settings({ user, onSave }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.shortcut) {
-      window.notify('Vyberte zkratku!', 'error');
-      return;
-    }
-
+    setSaving(true);
     try {
-      await setDoc(doc(db, 'settings', user.uid), {
-        ...form,
-        email: user.email,
-        approved: false
-      });
-
-      window.notify('Nastavení uloženo', 'success');
+      await setDoc(doc(db, 'settings', targetUid), form);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
       onSave?.();
-      // Skryj hlášku, že nastavení chybí
-      if (window.showSettingsWarning) {
-        window.showSettingsWarning = false;
-        // vynutíme refresh hlášky v App.js
-        window.dispatchEvent(new Event('settingsSaved'));
-      }
+      window.dispatchEvent(new Event('settingsSaved'));
     } catch (err) {
-      window.notify('Chyba: ' + err.message, 'error');
+      alert('Chyba při ukládání: ' + err.message);
     }
+    setSaving(false);
   };
 
   return (
-    <div className="settings-page">
-      <h2>Nastavení – {user.email}</h2>
-      <form onSubmit={handleSubmit} className="settings-form">
-        <div className="form-row">
-          <label>Jméno:</label>
-          <input name="firstName" value={form.firstName} onChange={handleChange} required />
+    <div className="set-settingsContainer">
+      <h2 className="set-title">
+        {adminEditMode ? `Nastavení za: ${adminEditMode.email}` : 'Moje nastavení'}
+      </h2>
+
+      {saved && <div className="set-success">Nastavení uloženo!</div>}
+
+      <form onSubmit={handleSubmit} className="set-form">
+        <div className="set-formRow">
+          <label>Jméno</label>
+          <input
+            name="firstName"
+            value={form.firstName}
+            onChange={handleChange}
+            required
+          />
         </div>
-        <div className="form-row">
-          <label>Příjmení:</label>
-          <input name="lastName" value={form.lastName} onChange={handleChange} required />
+
+        <div className="set-formRow">
+          <label>Příjmení</label>
+          <input
+            name="lastName"
+            value={form.lastName}
+            onChange={handleChange}
+            required
+          />
         </div>
-        <div className="form-row">
-          <label>Zkratka:</label>
+
+        <div className="set-formRow">
+          <label>Zkratka</label>
           <select
             value={form.shortcut}
             onChange={(e) => setForm({ ...form, shortcut: e.target.value })}
@@ -112,26 +111,48 @@ export default function Settings({ user, onSave }) {
             ))}
           </select>
         </div>
-        <div className="form-row">
-          <label>Počet všedních služeb:</label>
-          <input type="number" name="weekdayShifts" value={form.weekdayShifts} onChange={handleChange} min="0" />
+
+        <div className="set-formRow">
+          <label>Počet všedních služeb</label>
+          <input
+            type="number"
+            name="weekdayShifts"
+            value={form.weekdayShifts}
+            onChange={handleChange}
+            min="0"
+          />
         </div>
-        <div className="form-row">
-          <label>Počet víkendových služeb:</label>
-          <input type="number" name="weekendShifts" value={form.weekendShifts} onChange={handleChange} min="0" />
+
+        <div className="set-formRow">
+          <label>Počet víkendových služeb</label>
+          <input
+            type="number"
+            name="weekendShifts"
+            value={form.weekendShifts}
+            onChange={handleChange}
+            min="0"
+          />
         </div>
-        <div className="form-row">
-          <label>Interval mezi službami (dní):</label>
-          <input type="number" name="shiftInterval" value={form.shiftInterval} onChange={handleChange} min="0" />
+
+        <div className="set-formRow">
+          <label>Interval mezi službami (dní)</label>
+          <input
+            type="number"
+            name="shiftInterval"
+            value={form.shiftInterval}
+            onChange={handleChange}
+            min="1"
+          />
         </div>
-        <div className="form-row">
-          <label>Skupiny:</label>
-          <div className="checkbox-group">
+
+        <div className="set-formRow skupiny">
+          <label>Skupiny</label>
+          <div className="set-checkboxGroup">
             {allGroups.map(g => (
-              <label key={g} className="checkbox-label">
+              <label key={g} className="set-checkboxLabel">
                 <input
                   type="checkbox"
-                  value={g}
+                  name={g}
                   checked={form.groups.includes(g)}
                   onChange={handleChange}
                 />
@@ -140,7 +161,14 @@ export default function Settings({ user, onSave }) {
             ))}
           </div>
         </div>
-        <button type="submit" className="save-btn">Uložit</button>
+
+        <button
+          type="submit"
+          className="set-saveBtn"
+          disabled={saving}
+        >
+          {saving ? 'Ukládám...' : 'Uložit nastavení'}
+        </button>
       </form>
     </div>
   );

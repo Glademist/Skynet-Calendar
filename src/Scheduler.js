@@ -1,8 +1,8 @@
-// src/Scheduler.js
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from './firebase';
 import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { generateHolidays } from './utils';
+import './Scheduler.css'
 
 // ← NOVÉ: Pořadí lékařů
 const doctorOrder = [
@@ -109,14 +109,36 @@ export default function Scheduler() {
 
   const handleCellClick = (date, user) => {
     const key = `${date}_${user.uid}`;
+    const current = assignments[key]; // co tam teď je
+    const userGroups = user.groups || []; // skupiny uživatele
+    
+    // Pořadí pro cyklení: staří → střední → mladí
+    const groupCycleOrder = ['staří', 'střední', 'mladí'];
+    
+    let nextGroup = null;
+    
+    if (!current) {
+      // 1. klik: první skupina uživatele
+      nextGroup = userGroups.find(g => groupCycleOrder.includes(g));
+    } else {
+      // Najdi aktuální pozici a vezmi další
+      const currentIndex = groupCycleOrder.indexOf(current);
+      const possibleNext = groupCycleOrder.slice(currentIndex + 1);
+      
+      // Hledej další skupinu, kterou uživatel má
+      nextGroup = possibleNext.find(g => userGroups.includes(g));
+      
+      // Pokud žádnou další nemá → konec cyklu = nic
+    }
+
     setAssignments(prev => {
-      if (prev[key]) {
-        const { [key]: _, ...rest } = prev;
-        window.notify(`${user.shortcut} odebráno`, 'info');
-        return rest;
+      if (nextGroup) {
+        window.notify(`${user.shortcut} → ${groupLabel[nextGroup]}`, 'success');
+        return { ...prev, [key]: nextGroup };
       } else {
-        window.notify(`${user.shortcut} přiřazeno`, 'success');
-        return { ...prev, [key]: user.groups[0] };
+        window.notify(`${user.shortcut} odebrán`, 'info');
+        const { [key]: _, ...rest } = prev;
+        return rest;
       }
     });
   };
@@ -127,9 +149,19 @@ export default function Scheduler() {
   };
 
   const getCellClass = (date, user) => {
+    // ✅ PRIORITY 1: PREFERENCE LÉKAŘE
     const pref = userPreferences[user.uid]?.[date];
     if (pref === 'not available') return 'pref-not-available';
     if (pref === 'preferred') return 'pref-preferred';
+    
+    // ✅ PRIORITY 2: VÍKEND/SVÁTEK - VŽDY (i když obsazené)
+    if (isWeekendOrHoliday(date)) {
+      if (assignments[`${date}_${user.uid}`]) {
+        return 'sch-weekend-assigned';  // Obsazené víkendy
+      }
+      return 'sch-weekend-empty';       // Prázdné víkendy
+    }
+    
     return '';
   };
 
@@ -184,13 +216,60 @@ export default function Scheduler() {
     a.click();
   };
 
-  const getStats = (user) => ({ weekday: 0, fridays: 0, weekend: 0, holiday: 0, total: 0, totalFridays: 0, avgFridays: 0 });
+  const getStats = (user) => {
+    let weekday = 0;
+    let fridays = 0;
+    let weekend = 0;
+    let holiday = 0;
 
-  return (
-    <div className="scheduler-layout">
-      <div className="left-column">
-        <table className="schedule-table">
-          <thead className="fixed-header">
+    days.forEach(date => {
+      const key = `${date}_${user.uid}`;
+      const assignment = assignments[key];
+      
+      if (assignment) {
+        const dateObj = new Date(date);
+        const dayOfWeek = dateObj.getDay();
+        
+        if (dayOfWeek === 0 || dayOfWeek === 6) {
+          weekend++;  // Sobota/Neděle
+        } else if (dayOfWeek === 5) {
+          fridays++;  // Pátek
+        } else {
+          weekday++;  // Pondělí-Čtvrtek
+        }
+        
+        // Svátek (překrývá víkend)
+        if (generateHolidays().some(h => h.date === date)) {
+          holiday++;
+        }
+      }
+    });
+
+    const total = weekday + fridays + weekend + holiday;
+    const totalFridays = fridays;
+    const avgFridays = days.filter(d => new Date(d).getDay() === 5).length > 0 
+      ? (fridays / days.filter(d => new Date(d).getDay() === 5).length * 100).toFixed(1) + '%'
+      : '0%';
+
+    return { 
+      weekday, 
+      fridays, 
+      weekend, 
+      holiday, 
+      total, 
+      totalFridays, 
+      avgFridays 
+    };
+  };
+
+return (
+  <div className="sch-scheduler">
+    {/* HLAVNÍ OBSAH */}
+    <div className="sch-mainContent">
+      {/* LEVÁ Tabulka */}
+      <div className="sch-leftColumn">
+        <table className="sch-scheduleTable">
+          <thead>
             <tr>
               <th>Datum</th>
               {visibleUsers.map(u => (
@@ -199,9 +278,37 @@ export default function Scheduler() {
             </tr>
           </thead>
           <tbody>
-            {days.map(date => (
-              <tr key={date} className={isWeekendOrHoliday(date) ? 'special-day' : ''}>
-                <td>{date}</td>
+          {days.map(date => {
+            // VALIDACE - POČÍTÁNÍ SKUPIN
+            const assignmentsInDay = visibleUsers
+              .map(u => assignments[`${date}_${u.uid}`])
+              .filter(Boolean);
+            
+            const groupCount = { S: 0, M: 0, J: 0 };
+            assignmentsInDay.forEach(group => {
+              if (group === 'staří') groupCount.S++;
+              if (group === 'střední') groupCount.M++;
+              if (group === 'mladí') groupCount.J++;
+            });
+            
+            // VALIDACE TŘÍDA
+            let dateClass = '';
+            if (groupCount.S === 1 && groupCount.M === 1 && groupCount.J === 1) {
+              dateClass = 'sch-date-perfect';  // 🟢 ZELENÁ
+            } else if (groupCount.S > 1 || groupCount.M > 1 || groupCount.J > 1) {
+              dateClass = 'sch-date-error';    // 🔴 ČERVENÁ
+            } else if (assignmentsInDay.length > 0 && assignmentsInDay.length < 3) {
+              dateClass = 'sch-date-warning';  // 🟡 ŽLUTÁ
+            }
+            
+            // VÍKENDY A SVÁTKY + VALIDACE
+            const weekendClass = isWeekendOrHoliday(date) ? 'sch-specialDay' : '';
+            
+            return (
+              <tr key={date}>
+                <td className={`sch-date-cell ${dateClass} ${weekendClass}`}>
+                  {date}
+                </td>
                 {visibleUsers.map(u => (
                   <td
                     key={u.uid}
@@ -214,17 +321,19 @@ export default function Scheduler() {
                   </td>
                 ))}
               </tr>
-            ))}
+            );
+          })}
           </tbody>
         </table>
       </div>
 
-      <div className="right-column">
-        <div className="group-buttons">
+      {/* PRAVÁ - STATISTIKY */}
+      <div className="sch-rightColumn">
+        <div className="sch-groupButtons">
           {groupOrder.map(group => (
             <button
               key={group}
-              className={`group-btn ${!collapsed[group] ? 'active' : ''}`}
+              className={`sch-groupBtn ${!collapsed[group] ? "sch-active" : ''}`}
               onClick={() => toggleGroup(group)}
             >
               {group.charAt(0).toUpperCase() + group.slice(1)} ({users[group]?.length || 0})
@@ -232,18 +341,18 @@ export default function Scheduler() {
           ))}
         </div>
 
-        <div className="q-nav">
-          <button onClick={() => setCurrentQOffset(prev => prev - 1)}>Předchozí Q</button>
+        <div className="sch-qNav">
+          <button onClick={() => setCurrentQOffset(prev => prev - 1)}>Pre</button>
           <span>Q{targetQuarter} {targetYear}</span>
-          <button onClick={() => setCurrentQOffset(prev => prev + 1)}>Následující Q</button>
-          <button onClick={exportToTSV}>Export TSV</button>
+          <button onClick={() => setCurrentQOffset(prev => prev + 1)}>Nex</button>
+          <button onClick={exportToTSV}>Exp</button>
         </div>
 
         <h3>Statistiky</h3>
         {groupOrder.map(group => (
           users[group] && !collapsed[group] && (
-            <div key={group} className="stats-table-block">
-              <table className="stats-compact-table">
+            <div key={group} className="sch-statsTableBlock">
+              <table className="sch-statsCompactTable">
                 <thead>
                   <tr>
                     <th></th>
@@ -253,13 +362,13 @@ export default function Scheduler() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="row-label">V</td>{users[group].map(u => <td key={u.uid}>{getStats(u).weekday}</td>)}</tr>
-                  <tr><td className="row-label">P</td>{users[group].map(u => <td key={u.uid}>{getStats(u).fridays}</td>)}</tr>
-                  <tr><td className="row-label">W</td>{users[group].map(u => <td key={u.uid}>{getStats(u).weekend}</td>)}</tr>
-                  <tr><td className="row-label">S</td>{users[group].map(u => <td key={u.uid}>{getStats(u).holiday}</td>)}</tr>
-                  <tr><td className="row-label">C</td>{users[group].map(u => <td key={u.uid}>{getStats(u).total}</td>)}</tr>
-                  <tr><td className="row-label">PC</td>{users[group].map(u => <td key={u.uid}>{getStats(u).totalFridays}</td>)}</tr>
-                  <tr><td className="row-label">PA</td>{users[group].map(u => <td key={u.uid}>{getStats(u).avgFridays}</td>)}</tr>
+                  <tr><td className="sch-rowLabel">V</td>{users[group].map(u => <td key={u.uid}>{getStats(u).weekday}</td>)}</tr>
+                  <tr><td className="sch-rowLabel">P</td>{users[group].map(u => <td key={u.uid}>{getStats(u).fridays}</td>)}</tr>
+                  <tr><td className="sch-rowLabel">W</td>{users[group].map(u => <td key={u.uid}>{getStats(u).weekend}</td>)}</tr>
+                  <tr><td className="sch-rowLabel">S</td>{users[group].map(u => <td key={u.uid}>{getStats(u).holiday}</td>)}</tr>
+                  <tr><td className="sch-rowLabel">C</td>{users[group].map(u => <td key={u.uid}>{getStats(u).total}</td>)}</tr>
+                  <tr><td className="sch-rowLabel">PC</td>{users[group].map(u => <td key={u.uid}>{getStats(u).totalFridays}</td>)}</tr>
+                  <tr><td className="sch-rowLabel">PA</td>{users[group].map(u => <td key={u.uid}>{getStats(u).avgFridays}</td>)}</tr>
                 </tbody>
               </table>
             </div>
@@ -267,5 +376,5 @@ export default function Scheduler() {
         ))}
       </div>
     </div>
-  );
-}
+  </div>
+)}

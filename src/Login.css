@@ -1,0 +1,202 @@
+/* LOGIN - PREFIX: log- */
+.log-loginContainer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  width: 100vw;
+  background-image: url('./backgrnd.jpg');  /* ← TVŮJ BACKGROUND */
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  padding: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  position: relative;
+}
+
+/* OVERLAY PRO ČITELNOST */
+.log-loginContainer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);  /* ← Tmavý overlay */
+  z-index: 1;
+}
+
+.log-loginCard {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 24px;
+  padding: 48px 40px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 
+    0 20px 40px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.2);
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  transition: all 0.3s ease;
+  position: relative;
+  z-index: 2;  /* ← Nad overlay */
+}
+
+.log-loginCard:hover {
+  transform: translateY(-4px);
+  box-shadow: 
+    0 30px 60px rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(255, 255, 255, 0.3);
+}
+
+.log-loginTitle {
+  font-size: 32px;
+  font-weight: 700;
+  color: #2c3e50;
+  margin-bottom: 32px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.2;
+}
+
+.log-googleBtn {
+  width: 100%;
+  padding: 16px 24px;
+  background: white;
+  border: 2px solid #e8eaed;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.log-googleBtn:hover {
+  background: #f8f9fa;
+  border-color: #1976d2;
+  box-shadow: 
+    0 8px 25px rgba(25, 118, 210, 0.15),
+    0 0 0 4px rgba(25, 118, 210, 0.1);
+  transform: translateY(-2px);
+}
+
+.log-googleBtn:active {
+  transform: translateY(0);
+}
+
+.log-googleIcon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.log-googleBtn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  transition: left 0.5s ease;
+}
+
+.log-googleBtn:hover::before {
+  left: 100%;
+}
+
+/* LOADING STATE */
+.log-googleBtn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  background: #f5f5f5;
+  border-color: #e0e6ed;
+}
+
+.log-googleBtn:disabled:hover {
+  transform: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* RESPONSIVNÍ */
+@media (max-width: 480px) {
+  .log-loginContainer {
+    padding: 16px;
+  }
+  
+  .log-loginCard {
+    padding: 32px 24px;
+    margin: 16px;
+  }
+  
+  .log-loginTitle {
+    font-size: 28px;
+  }
+  
+  .log-googleBtn {
+    padding: 14px 20px;
+    font-size: 15px;
+  }
+}
+
+/* TEMNÝ REŽIM */
+@media (prefers-color-scheme: dark) {
+  .log-loginCard {
+    background: rgba(26, 32, 44, 0.95);
+    color: #e2e8f0;
+  }
+  
+  .log-loginTitle {
+    color: #e2e8f0;
+  }
+  
+  .log-googleBtn {
+    background: #1e293b;
+    border-color: #334155;
+    color: #e2e8f0;
+  }
+  
+  .log-googleBtn:hover {
+    background: #334155;
+    border-color: #60a5fa;
+  }
+}
+
+/* ANIMACE */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.log-loginCard {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+/* CHYBA */
+.log-error {
+  background: #fee2e2;
+  color: #dc2626;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-top: 16px;
+  border: 1px solid #fecaca;
+  font-size: 14px;
+}

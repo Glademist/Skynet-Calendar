@@ -2,7 +2,7 @@
 import React from 'react';
 import { auth, googleProvider } from './firebase';
 import { signInWithPopup } from 'firebase/auth';
-import './styles/login.css';
+import "./Login.css"
 
 export default function Login() {
   const handleGoogle = () => {
@@ -12,11 +12,11 @@ export default function Login() {
   };
 
   return (
-    <div className="login-container">
-      <div className="login-card">
-        <h1 className="login-title">Skynet – služby</h1>
-        <button className="google-btn" onClick={handleGoogle}>
-          <img src="https://www.google.com/favicon.ico" alt="Google" className="google-icon" />
+    <div className="log-loginContainer">
+      <div className="log-loginCard">
+        <h1 className="log-loginTitle">Skynet – služby</h1>
+        <button className="log-googleBtn" onClick={handleGoogle}>
+          <img src="https://www.google.com/favicon.ico" alt="Google" className="log-googleIcon" />
           Přihlásit přes Google
         </button>
       </div>
