@@ -1,0 +1,391 @@
+/* SCHEDULER - PREFIX: sch- (OPRAVENÝ) */
+.sch-scheduler {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #fafbfc;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+}
+
+.sch-mainContent {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  gap: 24px;
+  padding: 24px;
+}
+
+.sch-leftColumn {
+  flex: 1;
+  overflow: auto;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  max-height: calc(100vh - 160px);
+}
+
+.sch-scheduleTable {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  min-width: 900px;
+}
+
+.sch-scheduleTable th {
+  background: #1976d2;
+  color: white;
+  padding: 10px 8px;
+  text-align: center;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-right: 1px solid #0d47a1;
+  border-bottom: 2px solid #0d47a1;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sch-scheduleTable th:last-child {
+  border-right: none;
+}
+
+.sch-scheduleTable th:first-child {
+  text-align: left;
+  padding-left: 12px;
+  min-width: 100px;
+}
+
+.sch-scheduleTable td {
+  padding: 8px 8px;
+  text-align: center;
+  border-right: 1px solid #e8ecf4;
+  border-bottom: 1px solid #e8ecf4;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease;
+  font-weight: 700;
+  color: #333;
+  font-size: 10px;
+  height: 12px;
+  vertical-align: middle;
+  position: relative;
+}
+
+.sch-scheduleTable td:last-child {
+  border-right: none;
+}
+
+.sch-scheduleTable tr:last-child td {
+  border-bottom: 2px solid #e8ecf4;
+}
+
+.sch-scheduleTable tr:hover td:first-child {
+  background: rgb(164, 204, 255);
+}
+
+.sch-scheduleTable td:first-child {
+  text-align: left;
+  padding: 8px 12px;
+  font-weight: 500;
+  color: #4b5563;
+  background: #f8fafc;
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  width: 90px;
+  min-width: 90px;
+  max-width: 90px;
+  border-right: 2px solid #d1d5db;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ✅ PRIORITY 1: VALIDACE - NEJvyšší priorita */
+.sch-date-perfect {
+  background: #10b981 !important;  /* 🟢 ZELENÁ */
+  color: white !important;
+  font-weight: bold !important;
+}
+
+.sch-date-warning {
+  background: #f59e0b !important;  /* 🟡 ŽLUTÁ */
+  color: white !important;
+  font-weight: bold !important;
+}
+
+.sch-date-error {
+  background: #ef4444 !important;  /* 🔴 ČERVENÁ */
+  color: white !important;
+  font-weight: bold !important;
+}
+
+/* ✅ PRIORITY 2: PREFERENCE LÉKAŘŮ - Vyšší než svátky */
+.pref-not-available {
+  background-color: #6b728088 !important;  /* Šedá */
+  color: white !important;
+}
+
+.pref-preferred {
+  background-color: #05966877 !important;   /* Tmavě zelená */
+  color: white !important;
+}
+
+/* ✅ PRIORITY 3: SVÁTKY A VÍKENDY - Nejnižší priorita */
+.sch-specialDay td {
+  background: #e6f3ff !important;  /* Světle modrá */
+}
+
+/* VŠECHNY buňky v řádku svátku/víkendu */
+.sch-specialDay {
+  background: #e6f3ff !important;
+}
+
+/* Zbytek kódu zůstává stejný... */
+
+.sch-rightColumn {
+  width: 320px;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  overflow-y: auto;
+  max-height: calc(100vh - 160px);
+  padding: 20px;
+}
+
+.sch-groupButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.sch-groupBtn {
+  padding: 6px 12px;
+  background: #f1f3f5;
+  color: #495057;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex: 1;
+  min-width: 60px;
+}
+
+.sch-groupBtn:hover {
+  background: #e2e6ea;
+  border-color: #a8b1bb;
+}
+
+.sch-groupBtn.sch-active {
+  background: #1976d2;
+  color: white;
+  border-color: #1976d2;
+}
+
+.sch-qNav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+}
+
+.sch-qNav button {
+  padding: 6px 10px;
+  background: #e3f2fd;
+  color: #1976d2;
+  border: 1px solid #bbdefb;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: auto;
+  width: auto;
+}
+
+.sch-qNav button:hover {
+  background: #bbdefb;
+  transform: none;
+}
+
+.sch-qNav span {
+  font-weight: 700;
+  color: #2c3e50;
+  font-size: 16px;
+  white-space: nowrap;
+  min-width: 100px;
+  text-align: center;
+}
+
+.sch-qNav button:last-child {
+  background: #fff3cd;
+  color: #856404;
+  border-color: #ffc107;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.sch-statsTableBlock {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #f8fafc;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.sch-statsCompactTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+
+.sch-statsCompactTable th {
+  background: #e9ecef;
+  color: #495057;
+  padding: 6px 4px;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid #dee2e6;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sch-statsCompactTable td {
+  padding: 6px 4px;
+  text-align: center;
+  border: 1px solid #dee2e6;
+  background: white;
+  font-weight: 500;
+  font-size: 11px;
+}
+
+.sch-rowLabel {
+  background: #1976d2 !important;
+  color: white !important;
+  font-weight: 700 !important;
+  text-align: center;
+  width: 25px !important;
+  font-size: 10px !important;
+}
+
+/* Responsivní a scrollbar zůstává stejný */
+@media (max-width: 1200px) {
+  .sch-mainContent {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .sch-rightColumn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .sch-mainContent {
+    padding: 16px;
+  }
+  .sch-scheduleTable {
+    font-size: 12px;
+  }
+  .sch-scheduleTable th,
+  .sch-scheduleTable td {
+    padding: 6px 4px;
+  }
+  .sch-qNav {
+    flex-direction: column;
+  }
+  .sch-qNav button {
+    width: 100%;
+  }
+}
+
+.sch-leftColumn::-webkit-scrollbar,
+.sch-rightColumn::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sch-leftColumn::-webkit-scrollbar-track,
+.sch-rightColumn::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 10px;
+}
+
+.sch-leftColumn::-webkit-scrollbar-thumb,
+.sch-rightColumn::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 10px;
+}
+
+.sch-leftColumn::-webkit-scrollbar-thumb:hover,
+.sch-rightColumn::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+/* ✅ SVÁTKY/VÍKENDY - JEN BUŇKA S DATEM (ne celý řádek) */
+.sch-date-cell.sch-specialDay {
+  background: #e6f3ff !important;
+}
+
+/* ✅ VALIDACE má stále vyšší prioritu */
+.sch-date-cell.sch-date-perfect.sch-specialDay {
+  background: #10b981 !important;
+}
+
+.sch-date-cell.sch-date-warning.sch-specialDay {
+  background: #f59e0b !important;
+}
+
+.sch-date-cell.sch-date-error.sch-specialDay {
+  background: #ef4444 !important;
+}
+
+/* ✅ VÍKENDY/SVÁTKY - OBSAZENÉ BUŇKY (SVĚTLE MODRÉ POZADÍ) */
+.sch-weekend-assigned {
+  background-color: #e6f3ff !important;  /* Stejné jako prázdné */
+}
+
+/* ✅ VÍKENDY/SVÁTKY - PRÁZDNÉ BUŇKY */
+.sch-weekend-empty {
+  background-color: #e6f3ff !important;
+}
+
+/* ✅ VALIDACE MÁ VŽDY PRIORITU (překreslí i víkend) */
+.sch-date-cell.sch-date-perfect {
+  background: #10b981 !important;
+}
+
+.sch-date-cell.sch-date-warning {
+  background: #f59e0b !important;
+}
+
+.sch-date-cell.sch-date-error {
+  background: #ef4444 !important;
+}
+
+/* ✅ HOVER EFEKT MÁ PRIORITU I NAD VÍKENDY */
+.sch-scheduleTable tr:hover td:first-child.sch-specialDay {
+  background: rgb(164, 204, 255) !important;  /* Modré zvýraznění */
+}
+
+/* ✅ VALIDACE MÁ VŽDY NEJVYŠŠÍ PRIORITU */
+.sch-scheduleTable tr:hover td:first-child.sch-date-perfect {
+  background: #10b981 !important;  /* Zelená */
+}
+
+.sch-scheduleTable tr:hover td:first-child.sch-date-warning {
+  background: #f59e0b !important;  /* Žlutá */
+}
+
+.sch-scheduleTable tr:hover td:first-child.sch-date-error {
+  background: #ef4444 !important;  /* Červená */
+}
