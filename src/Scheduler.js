@@ -292,9 +292,9 @@ export default function Scheduler() {
           <table className="w-full table-fixed border-collapse text-sm">
             <thead className="sticky top-0 bg-blue-700 text-white z-20">
               <tr>
-                <th className="text-left pl-4 py-3 w-32 sticky left-0 bg-blue-700 z-30">Datum</th>
-                {visibleUsers.map(u => (
-                  <th key={u.uid} className="py-2">{u.shortcut}</th>
+                  <th className="text-left pl-3 py- py-0 h-6 w-20 sticky left-0 bg-blue-700 z-30 text-xs font-semibold text-white">Datum</th>
+                  {visibleUsers.map(u => (
+                  <th key={u.uid} className="py-0 h-6 text-xs font-semibold">{u.shortcut}</th>
                 ))}
               </tr>
             </thead>
@@ -316,30 +316,32 @@ export default function Scheduler() {
                 const warning = dayAssignments.length > 0 && dayAssignments.length < 3; // ← opraveno
 
                 return (
-                    <tr key={date} className="hover:bg-gray-50">
-                    <td className={cn(
-  "sticky left-0 z-10 text-left pl-2 py-1 pr-3 font-medium text-xs bg-gray-100 border-r-4 border-gray-300 whitespace-nowrap",
-  isWeekendOrHoliday(date) && "bg-sky-50",
-  perfect && "bg-green-500 text-white font-bold",
-  error && "bg-red-500 text-white font-bold",
-  warning && "bg-amber-500 text-white font-bold"
-)}>
-  {date.slice(8, 10) + '.' + date.slice(5, 7) + '.'}
-</td>
+                  <tr key={date} className="hover:bg-gray-50">
+                  <td className={cn(
+                      "sticky left-0 z-10 text-left pl-2 pr-3 py-0 font-medium text-[11px] leading-3 bg-gray-100 border-r-4 border-gray-300 whitespace-nowrap",
+                      "h-6", // ← stejná výška jako ostatní buňky
+                      isWeekendOrHoliday(date) && "bg-sky-50",
+                      perfect && "bg-green-500 text-white font-bold",
+                      error && "bg-red-500 text-white font-bold",
+                      warning && "bg-amber-500 text-white font-bold"
+                    )}>
+                      {date.slice(8, 10) + '.' + date.slice(5, 7) + '.'}
+                    </td>
 
                     {visibleUsers.map(u => {
                         const key = `${date}_${u.uid}`;
                         return (
-                        <td
+                          <td
                             key={u.uid}
                             onClick={() => handleCellClick(date, u)}
                             className={cn(
-  "h-5 px-0.5 text-center cursor-pointer select-none font-bold text-[9px] leading-none border border-gray-300 transition-all",
-  getCellClasses(date, u)
-)}
-                        >
+                              "px-0.5 py-0 text-center cursor-pointer select-none font-bold text-[10px] leading-3 border border-gray-300 transition-all",
+                              "h-6", // ← přesně 24 px celkem (6×4px Tailwind jednotka)
+                              getCellClasses(date, u)
+                            )}
+                          >
                             {assignments[key] ? groupLabel[assignments[key]] : ''}
-                        </td>
+                          </td>
                         );
                     })}
                     </tr>
