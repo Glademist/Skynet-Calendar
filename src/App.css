@@ -86,7 +86,7 @@
 /* MAIN CONTENT */
 .app-mainContent {
   flex: 1;
-  overflow: hidden;
+  overflow: auto; /* ← změna z hidden na auto */
   background: #fafbfc;
   position: relative;
 }
