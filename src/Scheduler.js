@@ -372,47 +372,44 @@ const exportPreferencesToTSV = () => {
 
   const handleContextMenu = useCallback(async (date, user) => {
     const currentPref = userPreferences[user.uid]?.[date];
+    const isBlocked = currentPref === 'blocked';
 
-    if (currentPref === 'blocked') {
-      if (!window.confirm(`Odebrat blokaci pro ${user.shortcut} na ${date}?`)) return;
+    const ref = doc(db, 'dayStyles', user.uid);
+    const snap = await getDoc(ref);
 
-      // remove 'blocked'
-      const ref = doc(db, 'dayStyles', user.uid);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) return;
+    let styles = snap.exists() ? snap.data().styles || [] : [];
 
-      const styles = (snap.data().styles || []).filter(s => !(s.date === date && s.status === 'blocked'));
+    // remove existing entry for this date
+    styles = styles.filter(s => s.date !== date);
 
-      await setDoc(ref, { styles }, { merge: true });
-      window.notify?.(`Blokace odebrána: ${user.shortcut} – ${date}`, 'success');
-    } else {
-      if (!window.confirm(`Blokovat ${user.shortcut} na ${date}? (nebude mu přiřazena služba)`)) return;
-
-      const ref = doc(db, 'dayStyles', user.uid);
-      const snap = await getDoc(ref);
-      let styles = snap.exists() ? snap.data().styles || [] : [];
-
-      // remove any old entry for this date
-      styles = styles.filter(s => s.date !== date);
-
-      // add blocked
+    // add block if not already blocked
+    if (!isBlocked) {
       styles.push({ date, status: 'blocked' });
-
-      await setDoc(ref, { styles }, { merge: true });
-      window.notify?.(`Zablokováno: ${user.shortcut} – ${date}`, 'info');
     }
 
-    // Force refresh of preferences (simplest way)
+    await setDoc(ref, { styles }, { merge: true });
+
+    // update UI immediately
     setUserPreferences(prev => {
       const newPrefs = { ...prev };
       if (!newPrefs[user.uid]) newPrefs[user.uid] = {};
-      if (currentPref === 'blocked') {
+
+      if (isBlocked) {
         delete newPrefs[user.uid][date];
       } else {
         newPrefs[user.uid][date] = 'blocked';
       }
+
       return newPrefs;
     });
+
+    window.notify?.(
+      isBlocked
+        ? `Blokace odebrána: ${user.shortcut} – ${date}`
+        : `Zablokováno: ${user.shortcut} – ${date}`,
+      'info'
+    );
+
   }, [userPreferences]);
 
   // ==================== RENDER ====================
