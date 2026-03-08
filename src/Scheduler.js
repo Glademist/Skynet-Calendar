@@ -32,6 +32,9 @@ export default function Scheduler() {
 
   // groupLabel je konstanta → useMemo, aby useCallback nebyl závislý na novém objektu
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
+  const quarterMonths = useMemo(() => {
+    return [qStartMonth + 1, qStartMonth + 2, qStartMonth + 3];
+  }, [qStartMonth]);
 
   const today = new Date();
   const currentQuarter = Math.floor(today.getMonth() / 3) + 1;
