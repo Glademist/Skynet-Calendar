@@ -310,24 +310,29 @@ const exportPreferencesToTSV = () => {
   };
 
   const getMonthlyStats = (user) => {
-    const stats = { 1: { weekday: 0, fridays: 0, weekend: 0, total: 0 },
-                    2: { weekday: 0, fridays: 0, weekend: 0, total: 0 },
-                    3: { weekday: 0, fridays: 0, weekend: 0, total: 0 } };
+    const stats = {
+      1: { weekday: 0, fridays: 0, weekend: 0, total: 0 },
+      2: { weekday: 0, fridays: 0, weekend: 0, total: 0 },
+      3: { weekday: 0, fridays: 0, weekend: 0, total: 0 }
+    };
 
     days.forEach(date => {
       const key = `${date}_${user.uid}`;
-      if (assignments[key]) {
-        const d = new Date(date);
-        const month = d.getMonth() + 1; // 1=leden, 2=únor, 3=březen (pro Q1 2026)
-        
-        if (!quarterMonths.includes(month)) return;
+      if (!assignments[key]) return;
 
-        const dow = d.getDay();
-        if (dow === 5) stats[month].fridays++;
-        else if (dow === 6 || dow === 0) stats[month].weekend++;
-        else stats[month].weekday++;
-        stats[month].total++;
-      }
+      const d = new Date(date);
+      const realMonth = d.getMonth() + 1;
+
+      const mIndex = quarterMonths.indexOf(realMonth) + 1;
+      if (mIndex === 0) return;
+
+      const dow = d.getDay();
+
+      if (dow === 5) stats[mIndex].fridays++;
+      else if (dow === 6 || dow === 0) stats[mIndex].weekend++;
+      else stats[mIndex].weekday++;
+
+      stats[mIndex].total++;
     });
 
     return stats;
