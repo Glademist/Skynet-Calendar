@@ -201,7 +201,8 @@ export default function Scheduler() {
     // Preference mají absolutní prioritu
     if (pref === 'not available') return { className: 'bg-gray-500 text-white line-through cursor-not-allowed', hasIntervalViolation: false };
     if (pref === 'preferred') return { className: 'bg-green-600 text-white font-bold', hasIntervalViolation: false };
-
+    if (pref === 'blocked') return {className: 'bg-gray-800 text-gray-200 line-through cursor-not-allowed select-none',hasIntervalViolation: false};
+  
     const d = new Date(date);
     const dayOfWeek = d.getDay();
     const isWeekendDay = dayOfWeek === 5 || dayOfWeek === 6 || dayOfWeek === 0;
@@ -360,6 +361,51 @@ const exportPreferencesToTSV = () => {
     a.click();
   };
 
+  const handleContextMenu = useCallback(async (date, user) => {
+    const currentPref = userPreferences[user.uid]?.[date];
+
+    if (currentPref === 'blocked') {
+      if (!window.confirm(`Odebrat blokaci pro ${user.shortcut} na ${date}?`)) return;
+
+      // remove 'blocked'
+      const ref = doc(db, 'dayStyles', user.uid);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return;
+
+      const styles = (snap.data().styles || []).filter(s => !(s.date === date && s.status === 'blocked'));
+
+      await setDoc(ref, { styles }, { merge: true });
+      window.notify?.(`Blokace odebrána: ${user.shortcut} – ${date}`, 'success');
+    } else {
+      if (!window.confirm(`Blokovat ${user.shortcut} na ${date}? (nebude mu přiřazena služba)`)) return;
+
+      const ref = doc(db, 'dayStyles', user.uid);
+      const snap = await getDoc(ref);
+      let styles = snap.exists() ? snap.data().styles || [] : [];
+
+      // remove any old entry for this date
+      styles = styles.filter(s => s.date !== date);
+
+      // add blocked
+      styles.push({ date, status: 'blocked' });
+
+      await setDoc(ref, { styles }, { merge: true });
+      window.notify?.(`Zablokováno: ${user.shortcut} – ${date}`, 'info');
+    }
+
+    // Force refresh of preferences (simplest way)
+    setUserPreferences(prev => {
+      const newPrefs = { ...prev };
+      if (!newPrefs[user.uid]) newPrefs[user.uid] = {};
+      if (currentPref === 'blocked') {
+        delete newPrefs[user.uid][date];
+      } else {
+        newPrefs[user.uid][date] = 'blocked';
+      }
+      return newPrefs;
+    });
+  }, [userPreferences]);
+
   // ==================== RENDER ====================
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -448,6 +494,10 @@ const exportPreferencesToTSV = () => {
                           <td
                             key={u.uid}
                             onClick={() => handleCellClick(date, u)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              handleContextMenu(date, u);
+                            }}
                             className={cn(
                               "px-0.5 py-0 text-center cursor-pointer select-none font-bold text-[10px] leading-3 border border-gray-300 transition-all h-6",
                               cellInfo.className
@@ -462,6 +512,8 @@ const exportPreferencesToTSV = () => {
                                   </span>
                                 )}
                               </>
+                            ) : pref === 'blocked' ? (
+                              <span className="text-[9px] opacity-90">BLOCK</span>
                             ) : ''}
                           </td>
                         );
