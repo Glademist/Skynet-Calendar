@@ -32,15 +32,16 @@ export default function Scheduler() {
 
   // groupLabel je konstanta → useMemo, aby useCallback nebyl závislý na novém objektu
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
-  const quarterMonths = useMemo(() => {
-    return [qStartMonth + 1, qStartMonth + 2, qStartMonth + 3];
-  }, [qStartMonth]);
 
   const today = new Date();
   const currentQuarter = Math.floor(today.getMonth() / 3) + 1;
   const targetQuarter = ((currentQuarter + currentQOffset - 1) % 4) + 1;
   const targetYear = currentQuarter + currentQOffset > 4 ? today.getFullYear() + 1 : today.getFullYear();
   const qStartMonth = (targetQuarter - 1) * 3;
+
+  const quarterMonths = useMemo(() => {
+    return [qStartMonth + 1, qStartMonth + 2, qStartMonth + 3];
+  }, [qStartMonth]);
 
   // ==================== NAČTENÍ DAT ====================
   useEffect(() => {
@@ -515,7 +516,7 @@ const exportPreferencesToTSV = () => {
                                   </span>
                                 )}
                               </>
-                            ) : pref === 'blocked' ? (
+                            ) : userPreferences[u.uid]?.[date] === 'blocked' ? (
                               <span className="text-[9px] opacity-90">BLOCK</span>
                             ) : ''}
                           </td>
