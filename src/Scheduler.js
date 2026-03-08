@@ -314,7 +314,8 @@ const exportPreferencesToTSV = () => {
       if (assignments[key]) {
         const d = new Date(date);
         const month = d.getMonth() + 1; // 1=leden, 2=únor, 3=březen (pro Q1 2026)
-        if (month < 1 || month > 3) return; // ignoruj prosinec/březen mimo kvartál
+        
+        if (!quarterMonths.includes(month)) return;
 
         const dow = d.getDay();
         if (dow === 5) stats[month].fridays++;
@@ -524,7 +525,7 @@ const exportPreferencesToTSV = () => {
           <div className="space-y-6">
             <h3 className="text-lg font-semibold text-gray-800">Statistiky služeb</h3>
             
-            {/* Nová tlačítka pro přepínání měsíců – pod nadpisem */}
+            {/* Nová tlačítka pro měsíce – čitelná jména */}
             <div className="flex flex-wrap gap-2 mb-4">
               <button
                 onClick={() => setSelectedMonth(0)}
@@ -535,18 +536,23 @@ const exportPreferencesToTSV = () => {
               >
                 Q{targetQuarter} (celkem)
               </button>
-              {[1, 2, 3].map(m => (
-                <button
-                  key={m}
-                  onClick={() => setSelectedMonth(m)}
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
-                    selectedMonth === m ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-gray-200 text-gray-600 hover:bg-gray-300"
-                  )}
-                >
-                  Q{targetQuarter}/{m} ({qStartMonth + m}.) {/* Obecně: měsíc kvartálu */}
-                </button>
-              ))}
+              {[1, 2, 3].map(m => {
+                const realMonthNum = qStartMonth + m; // 4,5,6 pro Q2 atd.
+                const monthName = ['','Leden','Únor','Březen','Duben','Květen','Červen',
+                                  'Červenec','Srpen','Září','Říjen','Listopad','Prosinec'][realMonthNum];
+                return (
+                  <button
+                    key={m}
+                    onClick={() => setSelectedMonth(m)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
+                      selectedMonth === m ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-gray-200 text-gray-600 hover:bg-gray-300"
+                    )}
+                  >
+                    {monthName} ({realMonthNum}.)
+                  </button>
+                );
+              })}
             </div>
 
             {groupOrder.map(group => {
