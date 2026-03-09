@@ -29,9 +29,18 @@ export default function Scheduler() {
   const [selectedMonth, setSelectedMonth] = useState(0);
 
   const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
-
-  // groupLabel je konstanta → useMemo, aby useCallback nebyl závislý na novém objektu
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
+
+// ==================== NEW UNBLOCK HELPERS ====================
+  const getBaseGroup = useCallback((val) => val ? val.replace(/_u$/, '') : null, []);
+  const isUnblockedAssignment = useCallback((val) => val?.endsWith('_u') || false, []);
+
+  const getDisplayLabel = useCallback((assigned) => {
+    if (!assigned) return '';
+    const base = getBaseGroup(assigned);
+    const label = groupLabel[base] || base;
+    return isUnblockedAssignment(assigned) ? label + 'U' : label;
+  }, [groupLabel, getBaseGroup]);
 
   const today = new Date();
   const currentQuarter = Math.floor(today.getMonth() / 3) + 1;
@@ -122,29 +131,46 @@ export default function Scheduler() {
     setCollapsed(prev => ({ ...prev, [group]: !prev[group] }));
   }, []);
 
-  const handleCellClick = useCallback((date, user) => {
+const handleCellClick = useCallback((date, user) => {
     const key = `${date}_${user.uid}`;
     const current = assignments[key];
+    const pref = userPreferences[user.uid]?.[date];
     const userGroups = user.groups || [];
     const cycle = ['staří', 'střední', 'mladí'];
 
-    let next = null;
-    if (!current) next = userGroups.find(g => cycle.includes(g));
-    else {
-      const idx = cycle.indexOf(current);
-      next = cycle.slice(idx + 1).find(g => userGroups.includes(g));
+    if (pref === 'blocked') {
+      window.notify?.("Den je blokován. Pravým klikem nejprve unblock.", 'warning');
+      return;
     }
 
-    setAssignments(prev => {
-      if (next) {
-        window.notify?.(`${user.shortcut} → ${groupLabel[next]}`, 'success');
-        return { ...prev, [key]: next };
+    const isUnblockedDay = pref === 'unblocked';
+    let next = null;
+
+    if (!current) {
+      next = userGroups.find(g => cycle.includes(g));
+      if (isUnblockedDay && next) next += '_u';
+    } else {
+      const baseCurrent = getBaseGroup(current);
+      const idx = cycle.indexOf(baseCurrent);
+      next = cycle.slice(idx + 1).find(g => userGroups.includes(g));
+      if (isUnblockedDay && next) next += '_u';
+
+      if (!next) {
+        // remove shift but KEEP unblocked status
+        setAssignments(prev => {
+          const { [key]: _, ...rest } = prev;
+          window.notify?.(`${user.shortcut} odebrán (unblocked zůstává)`, 'info');
+          return rest;
+        });
+        return;
       }
-      window.notify?.(`${user.shortcut} odebrán`, 'info');
-      const { [key]: _, ...rest } = prev;
-      return rest;
-    });
-  }, [assignments, groupLabel]);
+    }
+
+    if (next) {
+      setAssignments(prev => ({ ...prev, [key]: next }));
+      window.notify?.(`${user.shortcut} → ${getDisplayLabel(next)}`, 'success');
+    }
+  }, [assignments, userPreferences, getBaseGroup, getDisplayLabel]);
 
   const exportToTSV = () => {
         let tsv = 'Datum\t';
@@ -197,16 +223,26 @@ export default function Scheduler() {
     return list;
   }, [users, collapsed, groupOrder]);
 
-  const getCellClasses = useCallback((date, user) => {
+const getCellClasses = useCallback((date, user) => {
     const key = `${date}_${user.uid}`;
     const assigned = !!assignments[key];
     const pref = userPreferences[user.uid]?.[date];
 
-    // Preference mají absolutní prioritu
     if (pref === 'not available') return { className: 'bg-gray-500 text-white line-through cursor-not-allowed', hasIntervalViolation: false };
     if (pref === 'preferred') return { className: 'bg-green-600 text-white font-bold', hasIntervalViolation: false };
-    if (pref === 'blocked') return {className: 'bg-gray-800 text-gray-200 line-through cursor-not-allowed select-none',hasIntervalViolation: false};
-  
+
+    // === UNBLOCKED (yellowish) ===
+    if (pref === 'unblocked') {
+      return {
+        className: assigned 
+          ? 'bg-amber-600 text-white font-bold border-2 border-yellow-300' 
+          : 'bg-amber-100 border-2 border-amber-400 text-amber-700 font-medium',
+        hasIntervalViolation: false
+      };
+    }
+
+    if (pref === 'blocked') return {className: 'bg-gray-800 text-gray-200 line-through cursor-not-allowed select-none',hasIntervalViolation: false}; 
+
     const d = new Date(date);
     const dayOfWeek = d.getDay();
     const isWeekendDay = dayOfWeek === 5 || dayOfWeek === 6 || dayOfWeek === 0;
@@ -517,46 +553,42 @@ const exportPreferencesToTSV = () => {
     a.click();
   };
 
-  const handleContextMenu = useCallback(async (date, user) => {
-    const currentPref = userPreferences[user.uid]?.[date];
-    const isBlocked = currentPref === 'blocked';
+ const handleContextMenu = useCallback(async (date, user) => {
+    const currentPref = userPreferences[user.uid]?.[date] || null;
+    let newStatus = null;
+    let notifyMsg = '';
+
+    if (currentPref === 'blocked') {
+      newStatus = 'unblocked';
+      notifyMsg = `✅ Unblocked: ${user.shortcut} – ${date}`;
+    } else if (currentPref === 'unblocked') {
+      newStatus = null;
+      notifyMsg = `Unblock removed: ${user.shortcut} – ${date}`;
+    } else {
+      newStatus = 'blocked';
+      notifyMsg = `⛔ Blocked: ${user.shortcut} – ${date}`;
+    }
 
     const ref = doc(db, 'dayStyles', user.uid);
     const snap = await getDoc(ref);
-
     let styles = snap.exists() ? snap.data().styles || [] : [];
-
-    // remove existing entry for this date
     styles = styles.filter(s => s.date !== date);
-
-    // add block if not already blocked
-    if (!isBlocked) {
-      styles.push({ date, status: 'blocked' });
-    }
+    if (newStatus) styles.push({ date, status: newStatus });
 
     await setDoc(ref, { styles }, { merge: true });
 
-    // update UI immediately
     setUserPreferences(prev => {
       const newPrefs = { ...prev };
       if (!newPrefs[user.uid]) newPrefs[user.uid] = {};
-
-      if (isBlocked) {
-        delete newPrefs[user.uid][date];
+      if (newStatus) {
+        newPrefs[user.uid][date] = newStatus;
       } else {
-        newPrefs[user.uid][date] = 'blocked';
+        delete newPrefs[user.uid][date];
       }
-
       return newPrefs;
     });
 
-    window.notify?.(
-      isBlocked
-        ? `Blokace odebrána: ${user.shortcut} – ${date}`
-        : `Zablokováno: ${user.shortcut} – ${date}`,
-      'info'
-    );
-
+    window.notify?.(notifyMsg, newStatus === 'unblocked' ? 'success' : 'info');
   }, [userPreferences]);
 
   // ==================== RENDER ====================
@@ -581,17 +613,14 @@ const exportPreferencesToTSV = () => {
                     .filter(Boolean); */
                 const allAssignmentsForDate = Object.keys(assignments)
                     .filter(k => k.startsWith(date + "_"))
-                    .map(k => assignments[k]);
-                /*const totalAssignmentsForDate = Object.keys(assignments)
-                    .filter(k => k.startsWith(date + "_"))
-                    .length;*/
+                    .map(k => getBaseGroup(assignments[k]));
 
-                const count = { S: 0, M: 0, J: 0 };
-                allAssignmentsForDate.forEach(g => {
-                  if (g === 'staří') count.S++;
-                  if (g === 'střední') count.M++;
-                  if (g === 'mladí') count.J++;
-                });
+                  const count = { S: 0, M: 0, J: 0 };
+                  allAssignmentsForDate.forEach(g => {
+                    if (g === 'staří') count.S++;
+                    if (g === 'střední') count.M++;
+                    if (g === 'mladí') count.J++;
+                  });
 
                 const perfect =
                   count.S === 1 &&
@@ -640,37 +669,41 @@ const exportPreferencesToTSV = () => {
                     </td>
 
                     {visibleUsers.map(u => {
-                      const cellInfo = getCellClasses(date, u);
+                        const cellInfo = getCellClasses(date, u);
                         const key = `${date}_${u.uid}`;
                         const assignedGroup = assignments[key];
+                        const pref = userPreferences[u.uid]?.[date];
+
+                        let displayContent = '';
+                        if (assignedGroup) {
+                          displayContent = getDisplayLabel(assignedGroup);
+                        } else if (pref === 'unblocked') {
+                          displayContent = 'U';
+                        } else if (pref === 'blocked') {
+                          displayContent = 'BLOCK';
+                        }
+
                         return (
                           <td
                             key={u.uid}
                             onClick={() => handleCellClick(date, u)}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              handleContextMenu(date, u);
-                            }}
+                            onContextMenu={(e) => { e.preventDefault(); handleContextMenu(date, u); }}
                             className={cn(
                               "px-0.5 py-0 text-center cursor-pointer select-none font-bold text-[10px] leading-3 border border-gray-300 transition-all h-6",
                               cellInfo.className
                             )}
                           >
-                            {assignedGroup ? (
+                            {displayContent && (
                               <>
-                                {groupLabel[assignedGroup]}
+                                {displayContent}
                                 {cellInfo.hasIntervalViolation && u.shiftInterval && (
-                                  <span className="text-[8px] align-super opacity-80 ml-0.5">
-                                    ({u.shiftInterval})
-                                  </span>
+                                  <span className="text-[8px] align-super opacity-80 ml-0.5">({u.shiftInterval})</span>
                                 )}
                               </>
-                            ) : userPreferences[u.uid]?.[date] === 'blocked' ? (
-                              <span className="text-[9px] opacity-90">BLOCK</span>
-                            ) : ''}
+                            )}
                           </td>
                         );
-                    })}
+                      })}
                     </tr>
                 );
                 })}
