@@ -559,19 +559,28 @@ const handleContextMenu = useCallback(async (date, user) => {
     let notifyType = 'info';
 
     if (effective === 'blocked') {
+      // Blocked → Unblocked (preserve original demand)
       newStatus = (baseStatus === 'preferred' || baseStatus === 'not available')
         ? `${baseStatus}_unblocked`
         : 'unblocked';
       notifyMsg = `✅ Unblocked: ${user.shortcut} – ${date}`;
       notifyType = 'success';
     } else if (effective === 'unblocked') {
-      newStatus = (baseStatus === 'preferred' || baseStatus === 'not available') ? baseStatus : null;
+      // Unblocked → Restore original demand (or clear)
+      newStatus = (baseStatus === 'preferred' || baseStatus === 'not available')
+        ? baseStatus
+        : null;
       notifyMsg = newStatus
         ? `Original demand restored (${newStatus}): ${user.shortcut} – ${date}`
         : `Unblock removed: ${user.shortcut} – ${date}`;
+      notifyType = newStatus ? 'success' : 'info';
     } else {
-      newStatus = 'blocked';
+      // Normal/preference day → Block WHILE preserving original demand
+      newStatus = (baseStatus === 'preferred' || baseStatus === 'not available')
+        ? `${baseStatus}_blocked`
+        : 'blocked';
       notifyMsg = `⛔ Blocked: ${user.shortcut} – ${date}`;
+      notifyType = 'warning';
     }
 
     const ref = doc(db, 'dayStyles', user.uid);
