@@ -352,6 +352,153 @@ const exportPreferencesToTSV = () => {
     }
   };
 
+  // ==================== WEEKEND SOLVER ====================
+  const weekendBlocks = useMemo(() => {
+    const blocks = [];
+    let current = [];
+    days.forEach(date => {
+      const d = new Date(date);
+      const dow = d.getDay();
+      if (dow === 5 || dow === 6 || dow === 0) { // Fri/Sat/Sun
+        current.push(date);
+      } else if (current.length > 0) {
+        blocks.push([...current]);
+        current = [];
+      }
+    });
+    if (current.length > 0) blocks.push(current);
+    return blocks;
+  }, [days]);  
+  
+  const autoAssignWeekends = useCallback(async () => {
+    if (!window.confirm('Spustit Auto Weekends?\n\nPřiřadí víkendy dle priorit: 24h buffer (striktní) -> max 1 směna za víkend -> střídání víkendů.')) return;
+
+    let newAssignments = { ...assignments };
+    let changes = 0;
+    let problems = [];
+
+    const groupMap = {
+      staří: users['staří'] || [],
+      střední: users['střední'] || [],
+      mladí: users['mladí'] || []
+    };
+
+    // --- HELPER FUNCTIONS ---
+
+    // 1. Hard Constraint: 24h Buffer (no shifts on Day n-1 or Day n+1)
+    const hasAdjacentShift = (user, dateStr, currentAssigns) => {
+      const d = new Date(dateStr);
+      const prev = new Date(d); prev.setDate(prev.getDate() - 1);
+      const next = new Date(d); next.setDate(next.getDate() + 1);
+
+      const prevStr = prev.toLocaleDateString('en-CA');
+      const nextStr = next.toLocaleDateString('en-CA');
+
+      return (
+        currentAssigns[`${prevStr}_${user.uid}`] ||
+        currentAssigns[`${nextStr}_${user.uid}`]
+      );
+    };
+
+    // 2. Soft Constraint: Already working in this specific Fri-Sat-Sun block?
+    const workedInSameBlock = (user, dateStr, currentAssigns) => {
+      const block = weekendBlocks.find(b => b.includes(dateStr));
+      if (!block) return false;
+      return block.some(d => d !== dateStr && currentAssigns[`${d}_${user.uid}`]);
+    };
+
+    // 3. Soft Constraint: Worked the previous or next weekend block?
+    const hasAdjacentWeekendBlackout = (user, dateStr, currentAssigns) => {
+      const bIdx = weekendBlocks.findIndex(b => b.includes(dateStr));
+      if (bIdx === -1) return false;
+
+      let blackout = false;
+      if (bIdx > 0) {
+        blackout = blackout || weekendBlocks[bIdx - 1].some(d => currentAssigns[`${d}_${user.uid}`]);
+      }
+      if (bIdx < weekendBlocks.length - 1) {
+        // Technically only looks forward if we have pre-assignments, but good to have
+        blackout = blackout || weekendBlocks[bIdx + 1].some(d => currentAssigns[`${d}_${user.uid}`]);
+      }
+      return blackout;
+    };
+
+    // 4. Base Availability: Respect user preferences
+    const isAvailable = (user, dateStr) => {
+      const pref = userPreferences[user.uid]?.[dateStr];
+      return pref !== 'blocked' && pref !== 'not available';
+    };
+
+    // Get all weekend dates
+    const weekendDates = days.filter(d => {
+      const dow = new Date(d).getDay();
+      return dow === 5 || dow === 6 || dow === 0;
+    });
+
+    // --- MAIN LOOP ---
+    for (const date of weekendDates) {
+      // Find which groups are missing on this date
+      const neededGroups = ['staří', 'střední', 'mladí'].filter(g => {
+        return !Object.keys(newAssignments).some(k => k.startsWith(`${date}_`) && newAssignments[k] === g);
+      });
+
+      for (const group of neededGroups) {
+        // Filter 1: Base availability and Hard Constraints (24h Buffer)
+        let candidates = groupMap[group].filter(u => 
+          isAvailable(u, date) && !hasAdjacentShift(u, date, newAssignments)
+        );
+
+        if (candidates.length === 0) {
+          problems.push(`${date} (${group.charAt(0).toUpperCase()}): Nikdo nemá volno (24h pravidlo nebo blokace).`);
+          continue;
+        }
+
+        // Filter 2: Apply Soft Constraints via Tiered Fallback
+        // Tier A (Ideal): No shift this weekend block AND no shift adjacent weekend
+        let viable = candidates.filter(u => 
+          !workedInSameBlock(u, date, newAssignments) && 
+          !hasAdjacentWeekendBlackout(u, date, newAssignments)
+        );
+
+        // Tier B (Relaxed): Allow adjacent weekend, but STRICTLY max 1 shift this block
+        if (viable.length === 0) {
+          viable = candidates.filter(u => !workedInSameBlock(u, date, newAssignments));
+        }
+
+        // Tier C (Desperate): Allow >1 shift this block (e.g. Fri + Sun), but STILL respects 24h buffer
+        if (viable.length === 0) {
+          viable = candidates; 
+          problems.push(`Upozornění: ${date} (${group.charAt(0).toUpperCase()}) musel porušit max 1 směnu za víkend.`);
+        }
+
+        // Filter 3: Fairness (Balance total assigned shifts)
+        viable.sort((a, b) => {
+          // Count total shifts assigned to this doctor in the current dataset
+          const countA = Object.keys(newAssignments).filter(k => k.endsWith(`_${a.uid}`)).length;
+          const countB = Object.keys(newAssignments).filter(k => k.endsWith(`_${b.uid}`)).length;
+          return countA - countB;
+        });
+
+        // Assign the best candidate
+        const chosen = viable[0];
+        const key = `${date}_${chosen.uid}`;
+        newAssignments[key] = group;
+        changes++;
+        
+        // Optional console log to trace assignment tiers
+        // console.log(`${date}: Assigned ${chosen.shortcut} to ${group}`);
+      }
+    }
+
+    setAssignments(newAssignments);
+
+    if (problems.length > 0) {
+      window.notify?.(`Hotovo! Přiřazeno ${changes} služeb.\nProblémy/Ústupky:\n${problems.join('\n')}`, 'warning');
+    } else {
+      window.notify?.(`Hotovo! Přiřazeno ${changes} víkendových služeb bez porušení pravidel.`, 'success');
+    }
+  }, [assignments, days, users, userPreferences, weekendBlocks]);
+
   const exportToBIT = () => {
     let tsv = '';
 
@@ -675,6 +822,13 @@ const exportPreferencesToTSV = () => {
 
           {/* === Exporty – teď tři tlačítka na jednom řádku === */}
           <div className="flex gap-3 mt-8">
+            {/* Auto Weekends solver */}
+              <button
+                onClick={autoAssignWeekends}
+                className="flex-1 py-3 bg-orange-600 text-white rounded-lg font-semibold hover:bg-orange-700 transition shadow-md text-sm"
+              >
+                Auto Weekends
+              </button>
             {/* 1. Export požadavků lékařů */}
             <button
               onClick={() => exportPreferencesToTSV()}
