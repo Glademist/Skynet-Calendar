@@ -27,6 +27,7 @@ export default function Scheduler() {
   const [days, setDays] = useState([]);
   const [userPreferences, setUserPreferences] = useState({});
   const [selectedMonth, setSelectedMonth] = useState(0);
+  const [originalPreferences, setOriginalPreferences] = useState({});
 
   const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
@@ -89,6 +90,7 @@ export default function Scheduler() {
         }
       }
       setUserPreferences(prefs);
+      setOriginalPreferences(JSON.parse(JSON.stringify(prefs))); // deep copy of originals
 
       // dny kvartálu
       const qDays = [];
@@ -553,33 +555,47 @@ const exportPreferencesToTSV = () => {
     a.click();
   };
 
- const handleContextMenu = useCallback(async (date, user) => {
+  const handleContextMenu = useCallback(async (date, user) => {
     const currentPref = userPreferences[user.uid]?.[date] || null;
+    const originalPref = originalPreferences[user.uid]?.[date] || null;   // ← this is the fix
+
     let newStatus = null;
     let notifyMsg = '';
+    let notifyType = 'info';
 
     if (currentPref === 'blocked') {
       newStatus = 'unblocked';
       notifyMsg = `✅ Unblocked: ${user.shortcut} – ${date}`;
-    } else if (currentPref === 'unblocked') {
-      newStatus = null;
-      notifyMsg = `Unblock removed: ${user.shortcut} – ${date}`;
-    } else {
+      notifyType = 'success';
+    } 
+    else if (currentPref === 'unblocked') {
+      newStatus = originalPref;                    // ← restore original demand!
+      notifyMsg = originalPref 
+        ? `Original demand restored (${originalPref}): ${user.shortcut} – ${date}`
+        : `Unblock removed: ${user.shortcut} – ${date}`;
+    } 
+    else {
       newStatus = 'blocked';
       notifyMsg = `⛔ Blocked: ${user.shortcut} – ${date}`;
     }
 
+    // Save to Firestore
     const ref = doc(db, 'dayStyles', user.uid);
     const snap = await getDoc(ref);
     let styles = snap.exists() ? snap.data().styles || [] : [];
     styles = styles.filter(s => s.date !== date);
-    if (newStatus) styles.push({ date, status: newStatus });
+    
+    if (newStatus) {
+      styles.push({ date, status: newStatus });
+    }
 
     await setDoc(ref, { styles }, { merge: true });
 
+    // Update local state
     setUserPreferences(prev => {
       const newPrefs = { ...prev };
       if (!newPrefs[user.uid]) newPrefs[user.uid] = {};
+      
       if (newStatus) {
         newPrefs[user.uid][date] = newStatus;
       } else {
@@ -588,8 +604,8 @@ const exportPreferencesToTSV = () => {
       return newPrefs;
     });
 
-    window.notify?.(notifyMsg, newStatus === 'unblocked' ? 'success' : 'info');
-  }, [userPreferences]);
+    window.notify?.(notifyMsg, notifyType);
+  }, [userPreferences, originalPreferences]);
 
   // ==================== RENDER ====================
   return (
