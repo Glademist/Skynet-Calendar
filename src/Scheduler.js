@@ -27,12 +27,24 @@ export default function Scheduler() {
   const [days, setDays] = useState([]);
   const [userPreferences, setUserPreferences] = useState({});
   const [selectedMonth, setSelectedMonth] = useState(0);
-  const [originalPreferences, setOriginalPreferences] = useState({});
 
   const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
 
-// ==================== NEW UNBLOCK HELPERS ====================
+  // ==================== COMPOSITE STATUS HELPERS (NO DB CHANGE) ====================
+  const getBaseStatus = useCallback((status) => {
+    if (!status) return null;
+    return status.replace(/_(blocked|unblocked)$/, '');
+  }, []);
+
+  const getEffectiveStatus = useCallback((status) => {
+    if (!status) return null;
+    if (status.endsWith('_unblocked')) return 'unblocked';
+    if (status.endsWith('_blocked')) return 'blocked';
+    return status;
+  }, []);
+
+  // ==================== ORIGINAL ASSIGNMENT HELPERS (still needed) ====================
   const getBaseGroup = useCallback((val) => val ? val.replace(/_u$/, '') : null, []);
   const isUnblockedAssignment = useCallback((val) => val?.endsWith('_u') || false, []);
 
@@ -41,7 +53,7 @@ export default function Scheduler() {
     const base = getBaseGroup(assigned);
     const label = groupLabel[base] || base;
     return isUnblockedAssignment(assigned) ? label + 'U' : label;
-  }, [groupLabel, getBaseGroup]);
+  }, [groupLabel, getBaseGroup, isUnblockedAssignment]);
 
   const today = new Date();
   const currentQuarter = Math.floor(today.getMonth() / 3) + 1;
@@ -56,7 +68,6 @@ export default function Scheduler() {
   // ==================== NAČTENÍ DAT ====================
   useEffect(() => {
     const fetchData = async () => {
-      // uživatelé
       const snapshot = await getDocs(collection(db, 'settings'));
       const allUsers = snapshot.docs.map(d => ({ uid: d.id, ...d.data() }));
 
@@ -76,7 +87,6 @@ export default function Scheduler() {
       setUsers(sortedGroups);
       setCollapsed(Object.keys(sortedGroups).reduce((a, g) => ({ ...a, [g]: false }), {}));
 
-      // preference
       const prefs = {};
       for (const group of Object.values(sortedGroups)) {
         for (const u of group) {
@@ -90,9 +100,7 @@ export default function Scheduler() {
         }
       }
       setUserPreferences(prefs);
-      setOriginalPreferences(JSON.parse(JSON.stringify(prefs))); // deep copy of originals
 
-      // dny kvartálu
       const qDays = [];
       const qStart = new Date(targetYear, qStartMonth, 1);
       const prevFriday = new Date(qStart);
@@ -111,7 +119,6 @@ export default function Scheduler() {
       }
       setDays(qDays);
 
-      // assignments
       const snap = await getDoc(doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`));
       setAssignments(snap.exists() ? snap.data() : {});
     };
@@ -125,7 +132,6 @@ export default function Scheduler() {
     setDoc(doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`), assignments);
   }, [assignments, targetQuarter, targetYear]);
 
-  // tlačítka Pre / Nex – teď už se používají
   const handlePrev = () => setCurrentQOffset(o => o - 1);
   const handleNext = () => setCurrentQOffset(o => o + 1);
 
@@ -133,19 +139,20 @@ export default function Scheduler() {
     setCollapsed(prev => ({ ...prev, [group]: !prev[group] }));
   }, []);
 
-const handleCellClick = useCallback((date, user) => {
+  const handleCellClick = useCallback((date, user) => {
     const key = `${date}_${user.uid}`;
     const current = assignments[key];
-    const pref = userPreferences[user.uid]?.[date];
+    const fullStatus = userPreferences[user.uid]?.[date];
+    const effective = getEffectiveStatus(fullStatus);
     const userGroups = user.groups || [];
     const cycle = ['staří', 'střední', 'mladí'];
 
-    if (pref === 'blocked') {
+    if (effective === 'blocked') {
       window.notify?.("Den je blokován. Pravým klikem nejprve unblock.", 'warning');
       return;
     }
 
-    const isUnblockedDay = pref === 'unblocked';
+    const isUnblockedDay = effective === 'unblocked';
     let next = null;
 
     if (!current) {
@@ -158,7 +165,6 @@ const handleCellClick = useCallback((date, user) => {
       if (isUnblockedDay && next) next += '_u';
 
       if (!next) {
-        // remove shift but KEEP unblocked status
         setAssignments(prev => {
           const { [key]: _, ...rest } = prev;
           window.notify?.(`${user.shortcut} odebrán (unblocked zůstává)`, 'info');
@@ -172,7 +178,7 @@ const handleCellClick = useCallback((date, user) => {
       setAssignments(prev => ({ ...prev, [key]: next }));
       window.notify?.(`${user.shortcut} → ${getDisplayLabel(next)}`, 'success');
     }
-  }, [assignments, userPreferences, getBaseGroup, getDisplayLabel]);
+  }, [assignments, userPreferences, getBaseGroup, getDisplayLabel, getEffectiveStatus]);
 
   const exportToTSV = () => {
         let tsv = 'Datum\t';
@@ -225,16 +231,16 @@ const handleCellClick = useCallback((date, user) => {
     return list;
   }, [users, collapsed, groupOrder]);
 
-const getCellClasses = useCallback((date, user) => {
+  const getCellClasses = useCallback((date, user) => {
     const key = `${date}_${user.uid}`;
     const assigned = !!assignments[key];
-    const pref = userPreferences[user.uid]?.[date];
+    const fullStatus = userPreferences[user.uid]?.[date];
+    const effective = getEffectiveStatus(fullStatus);
 
-    if (pref === 'not available') return { className: 'bg-gray-500 text-white line-through cursor-not-allowed', hasIntervalViolation: false };
-    if (pref === 'preferred') return { className: 'bg-green-600 text-white font-bold', hasIntervalViolation: false };
+    if (effective === 'not available') return { className: 'bg-gray-500 text-white line-through cursor-not-allowed', hasIntervalViolation: false };
+    if (effective === 'preferred') return { className: 'bg-green-600 text-white font-bold', hasIntervalViolation: false };
 
-    // === UNBLOCKED (yellowish) ===
-    if (pref === 'unblocked') {
+    if (effective === 'unblocked') {
       return {
         className: assigned 
           ? 'bg-amber-600 text-white font-bold border-2 border-yellow-300' 
@@ -243,13 +249,12 @@ const getCellClasses = useCallback((date, user) => {
       };
     }
 
-    if (pref === 'blocked') return {className: 'bg-gray-800 text-gray-200 line-through cursor-not-allowed select-none',hasIntervalViolation: false}; 
+    if (effective === 'blocked') return {className: 'bg-gray-800 text-gray-200 line-through cursor-not-allowed select-none',hasIntervalViolation: false}; 
 
     const d = new Date(date);
     const dayOfWeek = d.getDay();
     const isWeekendDay = dayOfWeek === 5 || dayOfWeek === 6 || dayOfWeek === 0;
 
-    // Všední dny – modré
     if (!isWeekendDay) {
       return {
         className: assigned ? 'bg-blue-600 text-white' : 'hover:bg-gray-100',
@@ -275,7 +280,6 @@ const getCellClasses = useCallback((date, user) => {
     const nearbyShifts = nearbyDates.filter(dt => assignments[`${dt}_${user.uid}`]);
     const hasWeekendConflict = nearbyShifts.length > 1;
 
-    // === Interval check (používáme správně shiftInterval z nastavení) ===
     let hasIntervalViolation = false;
     if (assigned && user.shiftInterval && user.shiftInterval > 0) {
       const minDays = Number(user.shiftInterval);
@@ -294,26 +298,14 @@ const getCellClasses = useCallback((date, user) => {
       }
     }
 
-    // === Finální priorita barev ===
     if (hasWeekendConflict) {
-      return {
-        className: assigned ? 'bg-red-600 text-white font-black' : 'bg-red-100',
-        hasIntervalViolation: false
-      };
+      return { className: assigned ? 'bg-red-600 text-white font-black' : 'bg-red-100', hasIntervalViolation: false };
     }
-
     if (hasIntervalViolation) {
-      return {
-        className: assigned ? 'bg-purple-600 text-white font-bold' : 'bg-purple-100',
-        hasIntervalViolation: true   // ← důležité pro zobrazení (7)
-      };
+      return { className: assigned ? 'bg-purple-600 text-white font-bold' : 'bg-purple-100', hasIntervalViolation: true };
     }
-
     if (nearbyShifts.length > 0) {
-      return {
-        className: assigned ? 'bg-orange-600 text-white font-bold' : 'bg-orange-100',
-        hasIntervalViolation: false
-      };
+      return { className: assigned ? 'bg-orange-600 text-white font-bold' : 'bg-orange-100', hasIntervalViolation: false };
     }
 
     const isFriday = dayOfWeek === 5;
@@ -323,7 +315,7 @@ const getCellClasses = useCallback((date, user) => {
         : (isFriday ? 'bg-blue-100' : 'bg-blue-100'),
       hasIntervalViolation: false
     };
-  }, [assignments, userPreferences, days]);
+  }, [assignments, userPreferences, days, getEffectiveStatus]);
 
 const exportPreferencesToTSV = () => {
     let tsv = 'Datum\tDoktor\tZkratka\tPreference\n';
@@ -463,8 +455,9 @@ const exportPreferencesToTSV = () => {
 
     // 4. Base Availability: Respect user preferences
     const isAvailable = (user, dateStr) => {
-      const pref = userPreferences[user.uid]?.[dateStr];
-      return pref !== 'blocked' && pref !== 'not available';
+      const fullStatus = userPreferences[user.uid]?.[dateStr];
+      const effective = getEffectiveStatus(fullStatus);
+      return effective !== 'blocked' && effective !== 'not available';
     };
 
     // Get all weekend dates
@@ -535,7 +528,7 @@ const exportPreferencesToTSV = () => {
     } else {
       window.notify?.(`Hotovo! Přiřazeno ${changes} víkendových služeb bez porušení pravidel.`, 'success');
     }
-  }, [assignments, days, users, userPreferences, weekendBlocks]);
+  }, [assignments, days, users, userPreferences, weekendBlocks, getEffectiveStatus]);
 
   const exportToBIT = () => {
     let tsv = '';
@@ -555,47 +548,43 @@ const exportPreferencesToTSV = () => {
     a.click();
   };
 
-  const handleContextMenu = useCallback(async (date, user) => {
-    const currentPref = userPreferences[user.uid]?.[date] || null;
-    const originalPref = originalPreferences[user.uid]?.[date] || null;   // ← this is the fix
+  // ==================== UPDATED handleContextMenu (composite) ====================
+const handleContextMenu = useCallback(async (date, user) => {
+    const currentStatus = userPreferences[user.uid]?.[date] || null;
+    const baseStatus = getBaseStatus(currentStatus);
+    const effective = getEffectiveStatus(currentStatus);
 
     let newStatus = null;
     let notifyMsg = '';
     let notifyType = 'info';
 
-    if (currentPref === 'blocked') {
-      newStatus = 'unblocked';
+    if (effective === 'blocked') {
+      newStatus = (baseStatus === 'preferred' || baseStatus === 'not available')
+        ? `${baseStatus}_unblocked`
+        : 'unblocked';
       notifyMsg = `✅ Unblocked: ${user.shortcut} – ${date}`;
       notifyType = 'success';
-    } 
-    else if (currentPref === 'unblocked') {
-      newStatus = originalPref;                    // ← restore original demand!
-      notifyMsg = originalPref 
-        ? `Original demand restored (${originalPref}): ${user.shortcut} – ${date}`
+    } else if (effective === 'unblocked') {
+      newStatus = (baseStatus === 'preferred' || baseStatus === 'not available') ? baseStatus : null;
+      notifyMsg = newStatus
+        ? `Original demand restored (${newStatus}): ${user.shortcut} – ${date}`
         : `Unblock removed: ${user.shortcut} – ${date}`;
-    } 
-    else {
+    } else {
       newStatus = 'blocked';
       notifyMsg = `⛔ Blocked: ${user.shortcut} – ${date}`;
     }
 
-    // Save to Firestore
     const ref = doc(db, 'dayStyles', user.uid);
     const snap = await getDoc(ref);
     let styles = snap.exists() ? snap.data().styles || [] : [];
     styles = styles.filter(s => s.date !== date);
-    
-    if (newStatus) {
-      styles.push({ date, status: newStatus });
-    }
+    if (newStatus) styles.push({ date, status: newStatus });
 
     await setDoc(ref, { styles }, { merge: true });
 
-    // Update local state
     setUserPreferences(prev => {
       const newPrefs = { ...prev };
       if (!newPrefs[user.uid]) newPrefs[user.uid] = {};
-      
       if (newStatus) {
         newPrefs[user.uid][date] = newStatus;
       } else {
@@ -605,7 +594,7 @@ const exportPreferencesToTSV = () => {
     });
 
     window.notify?.(notifyMsg, notifyType);
-  }, [userPreferences, originalPreferences]);
+  }, [userPreferences, getBaseStatus, getEffectiveStatus]);
 
   // ==================== RENDER ====================
   return (
@@ -624,9 +613,6 @@ const exportPreferencesToTSV = () => {
             </thead>
             <tbody>
               {days.map(date => {
-                /* const dayAssignments = visibleUsers
-                    .map(u => assignments[`${date}_${u.uid}`])
-                    .filter(Boolean); */
                 const allAssignmentsForDate = Object.keys(assignments)
                     .filter(k => k.startsWith(date + "_"))
                     .map(k => getBaseGroup(assignments[k]));
@@ -688,14 +674,15 @@ const exportPreferencesToTSV = () => {
                         const cellInfo = getCellClasses(date, u);
                         const key = `${date}_${u.uid}`;
                         const assignedGroup = assignments[key];
-                        const pref = userPreferences[u.uid]?.[date];
+                        const fullStatus = userPreferences[u.uid]?.[date];
+                        const effective = getEffectiveStatus(fullStatus);
 
                         let displayContent = '';
                         if (assignedGroup) {
                           displayContent = getDisplayLabel(assignedGroup);
-                        } else if (pref === 'unblocked') {
+                        } else if (effective === 'unblocked') {
                           displayContent = 'U';
-                        } else if (pref === 'blocked') {
+                        } else if (effective === 'blocked') {
                           displayContent = 'BLOCK';
                         }
 
