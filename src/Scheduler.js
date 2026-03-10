@@ -238,27 +238,31 @@ export default function Scheduler() {
   }, [days, viewMode]);
 
   const visibleUsers = useMemo(() => {
+    const allDoctors = [];
     const seen = new Set();
-    const list = [];
 
     groupOrder.forEach(group => {
-      if (!collapsed[group] && users[group]) {
+      if (users[group]) {
         users[group].forEach(u => {
           if (!seen.has(u.uid)) {
             seen.add(u.uid);
-            list.push(u);
+            allDoctors.push({
+              ...u,
+              isActive: !collapsed[group]   // ← new flag
+            });
           }
         });
       }
     });
 
-    list.sort((a, b) => {
+    // Keep the doctorOrder sorting
+    allDoctors.sort((a, b) => {
       const aPos = doctorOrder.indexOf(a.shortcut);
       const bPos = doctorOrder.indexOf(b.shortcut);
       return (aPos === -1 ? Infinity : aPos) - (bPos === -1 ? Infinity : bPos);
     });
 
-    return list;
+    return allDoctors;
   }, [users, collapsed, groupOrder]);
 
   const exportDays = useMemo(() => {
@@ -273,7 +277,7 @@ export default function Scheduler() {
     const fullStatus = userPreferences[user.uid]?.[date];
     const effective = getEffectiveStatus(fullStatus);
 
-    if (effective === 'not available') return { className: 'bg-gray-500 text-white line-through cursor-not-allowed', hasIntervalViolation: false };
+    if (effective === 'not available') return { className: 'bg-gray-500 text-white line-through', hasIntervalViolation: false };
     if (effective === 'preferred') return { className: 'bg-green-600 text-white font-bold', hasIntervalViolation: false };
 
     if (effective === 'unblocked') {
@@ -285,7 +289,7 @@ export default function Scheduler() {
       };
     }
 
-    if (effective === 'blocked') return {className: 'bg-gray-800 text-gray-200 line-through cursor-not-allowed select-none',hasIntervalViolation: false}; 
+    if (effective === 'blocked') return {className: 'bg-gray-800 text-gray-200 line-through select-none',hasIntervalViolation: false}; 
 
     const d = new Date(date);
     const dayOfWeek = d.getDay();
@@ -694,8 +698,18 @@ export default function Scheduler() {
               <tr>
                   <th className="text-left pl-3 py- py-0 h-6 w-20 sticky left-0 bg-blue-700 z-30 text-xs font-semibold text-white">Datum</th>
                   {visibleUsers.map(u => (
-                  <th key={u.uid} className="py-0 h-6 text-xs font-semibold">{u.shortcut}</th>
-                ))}
+                    <th 
+                      key={u.uid} 
+                      className={cn(
+                        "py-0 h-6 text-xs font-semibold transition-colors",
+                        u.isActive 
+                          ? "text-white bg-blue-700" 
+                          : "text-gray-400 bg-gray-600 opacity-70"
+                      )}
+                    >
+                      {u.shortcut}
+                    </th>
+                  ))}
               </tr>
             </thead>
             <tbody>
@@ -776,21 +790,56 @@ export default function Scheduler() {
                         return (
                           <td
                             key={u.uid}
-                            onClick={() => handleCellClick(date, u)}
-                            onContextMenu={(e) => { e.preventDefault(); handleContextMenu(date, u); }}
+                            onClick={() => u.isActive && handleCellClick(date, u)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              if (u.isActive) handleContextMenu(date, u);
+                            }}
                             className={cn(
-                              "px-0.5 py-0 text-center cursor-pointer select-none font-bold text-[10px] leading-3 border border-gray-300 transition-all h-6",
-                              cellInfo.className
+                              "px-0.5 py-0 text-center select-none font-bold text-[10px] leading-3 border border-gray-300 transition-all h-6",
+                              
+                              // Inactive column base style (darker, subdued)
+                              !u.isActive && "bg-gray-800 text-gray-400 opacity-75 cursor-default",
+                              
+                              // When inactive BUT has assignment → light bg + dark text (overrides grey)
+                              !u.isActive && assignments[`${date}_${u.uid}`] && "bg-gray-200 text-gray-900 font-black opacity-95 border-gray-500",
+                              
+                              // Active columns – full original styling
+                              u.isActive && getCellClasses(date, u).className,
+                              
+                              // Force keep strong warnings visible
+                              assignments[`${date}_${u.uid}`] && getCellClasses(date, u).className.includes('red') && "opacity-100 font-black",
+                              assignments[`${date}_${u.uid}`] && getCellClasses(date, u).className.includes('purple') && "opacity-100 font-black"
                             )}
                           >
-                            {displayContent && (
-                              <>
-                                {displayContent}
-                                {cellInfo.hasIntervalViolation && u.shiftInterval && (
-                                  <span className="text-[8px] align-super opacity-80 ml-0.5">({u.shiftInterval})</span>
-                                )}
-                              </>
-                            )}
+                            {(() => {
+                              const assigned = assignments[`${date}_${u.uid}`];
+                              const display = assigned ? getDisplayLabel(assigned) : '';
+
+                              // Inactive column: show only real assignments, hide decorative states
+                              if (!u.isActive) {
+                                return display || '';  // only S/M/J/SU/MU etc. – nothing else
+                              }
+
+                              // Active column: full display
+                              let content = display;
+                              const fullStatus = userPreferences[u.uid]?.[date];
+                              const effective = getEffectiveStatus(fullStatus);
+
+                              if (!content) {
+                                if (effective === 'unblocked') content = 'U';
+                                if (effective === 'blocked') content = 'BLOCK';
+                              }
+
+                              return (
+                                <>
+                                  {content}
+                                  {getCellClasses(date, u).hasIntervalViolation && u.shiftInterval && (
+                                    <span className="text-[8px] align-super opacity-80 ml-0.5">({u.shiftInterval})</span>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </td>
                         );
                       })}
