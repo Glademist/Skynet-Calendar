@@ -182,25 +182,26 @@ export default function Scheduler() {
   }, [assignments, userPreferences, getBaseGroup, getDisplayLabel, getEffectiveStatus]);
 
   const exportToTSV = () => {
-        let tsv = 'Datum\t';
-        visibleUsers.forEach(u => tsv += `${u.shortcut}\t`);
-        tsv = tsv.trim() + '\n';
+    let tsv = 'Datum\t';
+    visibleUsers.forEach(u => tsv += `${u.shortcut}\t`);
+    tsv = tsv.trim() + '\n';
 
-        days.forEach(date => {
-            tsv += date + '\t';
-            visibleUsers.forEach(u => {
-            const key = `${date}_${u.uid}`;
-            tsv += (assignments[key] ? groupLabel[assignments[key]] : '') + '\t';
-            });
-            tsv = tsv.trim() + '\n';
-        });
+    exportDays.forEach(date => {
+      tsv += date + '\t';
+      visibleUsers.forEach(u => {
+        const key = `${date}_${u.uid}`;
+        const base = getBaseGroup(assignments[key]);
+        tsv += (base ? groupLabel[base] : '') + '\t';
+      });
+      tsv = tsv.trim() + '\n';
+    });
 
-        const blob = new Blob([tsv], { type: 'text/tab-separated-values' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `sluzby_Q${targetQuarter}_${targetYear}.tsv`;
-        a.click();
+    const blob = new Blob([tsv], { type: 'text/tab-separated-values' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sluzby_Q${targetQuarter}_${targetYear}.tsv`;
+    a.click();
   };
 
   const isWeekendOrHoliday = useCallback((date) => {
@@ -241,6 +242,12 @@ export default function Scheduler() {
 
     return list;
   }, [users, collapsed, groupOrder]);
+
+  const exportDays = useMemo(() => {
+    // Start exactly on the 1st day of the current quarter (e.g. 2026-04-01)
+    const quarterStartStr = `${targetYear}-${String(qStartMonth + 1).padStart(2, '0')}-01`;
+    return days.filter(date => date >= quarterStartStr);
+  }, [days, targetYear, qStartMonth]);
 
   const getCellClasses = useCallback((date, user) => {
     const key = `${date}_${user.uid}`;
@@ -544,10 +551,10 @@ const exportPreferencesToTSV = () => {
   const exportToBIT = () => {
     let tsv = '';
 
-    days.forEach(date => {
-      const sDoc = visibleUsers.find(u => assignments[`${date}_${u.uid}`] === 'staří')?.shortcut || '';
-      const mDoc = visibleUsers.find(u => assignments[`${date}_${u.uid}`] === 'střední')?.shortcut || '';
-      const jDoc = visibleUsers.find(u => assignments[`${date}_${u.uid}`] === 'mladí')?.shortcut || '';
+    exportDays.forEach(date => {
+      const sDoc = visibleUsers.find(u => getBaseGroup(assignments[`${date}_${u.uid}`]) === 'staří')?.shortcut || '';
+      const mDoc = visibleUsers.find(u => getBaseGroup(assignments[`${date}_${u.uid}`]) === 'střední')?.shortcut || '';
+      const jDoc = visibleUsers.find(u => getBaseGroup(assignments[`${date}_${u.uid}`]) === 'mladí')?.shortcut || '';
       tsv += `${sDoc}\t${mDoc}\t${jDoc}\n`;
     });
 
@@ -557,6 +564,8 @@ const exportPreferencesToTSV = () => {
     a.href = url;
     a.download = `bit_Q${targetQuarter}_${targetYear}.tsv`;
     a.click();
+
+    window.notify?.(`BIT export hotový (${exportDays.length} dní od 1.${qStartMonth + 1}.)`, 'success');
   };
 
   // ==================== UPDATED handleContextMenu (composite) ====================
