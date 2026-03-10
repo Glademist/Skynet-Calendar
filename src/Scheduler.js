@@ -27,6 +27,7 @@ export default function Scheduler() {
   const [days, setDays] = useState([]);
   const [userPreferences, setUserPreferences] = useState({});
   const [selectedMonth, setSelectedMonth] = useState(0);
+  const [viewMode, setViewMode] = useState('all'); // 'all' | 'weekends'
 
   const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
@@ -206,6 +207,16 @@ export default function Scheduler() {
     const d = new Date(date);
     return d.getDay() === 0 || d.getDay() === 6 || generateHolidays().some(h => h.date === date);
   }, []);
+
+  const displayedDays = useMemo(() => {
+    if (viewMode === 'all') return days;
+
+    return days.filter(date => {
+      const d = new Date(date);
+      const dow = d.getDay();           // 0 = Sunday, 5 = Friday, 6 = Saturday
+      return dow === 5 || dow === 6 || dow === 0;
+    });
+  }, [days, viewMode]);
 
   const visibleUsers = useMemo(() => {
     const seen = new Set();
@@ -621,7 +632,7 @@ const handleContextMenu = useCallback(async (date, user) => {
               </tr>
             </thead>
             <tbody>
-              {days.map(date => {
+              {displayedDays.map(date => {
                 const allAssignmentsForDate = Object.keys(assignments)
                     .filter(k => k.startsWith(date + "_"))
                     .map(k => getBaseGroup(assignments[k]));
@@ -727,8 +738,8 @@ const handleContextMenu = useCallback(async (date, user) => {
         <div className="flex-shrink-0 w-full lg:w-auto lg:min-w-[380px] bg-white rounded-2xl shadow-xl p-6 overflow-y-auto border border-gray-200">
           {/* === Tlačítka skupin – na jeden řádek, malá, elegantní === */}
           <div className="mb-6">
-            <h3 className="text-sm font-semibold text-gray-600 mb-3">Skupiny lékařů</h3>
-            <div className="flex flex-wrap gap-3 gap-2">
+            <h3 className="text-sm font-semibold text-gray-600 mb-3">Skupiny lékařů + zobrazení</h3>
+            <div className="flex flex-wrap gap-2 items-center">
               {groupOrder.map(group => {
                 const count = users[group]?.length || 0;
                 const isCollapsed = collapsed[group];
@@ -737,7 +748,7 @@ const handleContextMenu = useCallback(async (date, user) => {
                     key={group}
                     onClick={() => toggleGroup(group)}
                     className={cn(
-                      "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
+                      "px-3.5 py-1 rounded-lg text-sm font-medium transition-all min-w-[90px]",
                       isCollapsed
                         ? "bg-gray-200 text-gray-600 hover:bg-gray-300"
                         : "bg-blue-600 text-white hover:bg-blue-700 shadow-sm"
@@ -747,6 +758,20 @@ const handleContextMenu = useCallback(async (date, user) => {
                   </button>
                 );
               })}
+
+              {/* Small toggle pill – placed right after groups */}
+              <button
+                onClick={() => setViewMode(prev => prev === 'all' ? 'weekends' : 'all')}
+                className={cn(
+                  "px-3.5 py-1 rounded-lg text-sm font-medium transition shadow-sm whitespace-nowrap",
+                  viewMode === 'weekends'
+                    ? "bg-indigo-600 text-white hover:bg-indigo-700"
+                    : "bg-gray-300 text-gray-700 hover:bg-gray-400"
+                )}
+                title={viewMode === 'all' ? "Zobrazit jen víkendy" : "Zobrazit všechny dny"}
+              >
+                {viewMode === 'all' ? 'Víkendy' : 'Vše'}
+              </button>
             </div>
           </div>
 
@@ -770,7 +795,6 @@ const handleContextMenu = useCallback(async (date, user) => {
               Nx →
             </button>
           </div>
-
           {/* === STATISTIKY – vrácené a vylepšené! === */}
           <div className="space-y-6">
             <h3 className="text-lg font-semibold text-gray-800">Statistiky služeb</h3>
