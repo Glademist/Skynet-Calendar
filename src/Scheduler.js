@@ -241,28 +241,33 @@ export default function Scheduler() {
     const allDoctors = [];
     const seen = new Set();
 
+    // 1. Collect unique doctors with their full group list
     groupOrder.forEach(group => {
       if (users[group]) {
         users[group].forEach(u => {
           if (!seen.has(u.uid)) {
             seen.add(u.uid);
-            allDoctors.push({
-              ...u,
-              isActive: !collapsed[group]   // ← new flag
-            });
+            allDoctors.push({ ...u });
           }
         });
       }
     });
 
-    // Keep the doctorOrder sorting
+    // 2. Sort by doctorOrder (unchanged)
     allDoctors.sort((a, b) => {
       const aPos = doctorOrder.indexOf(a.shortcut);
       const bPos = doctorOrder.indexOf(b.shortcut);
       return (aPos === -1 ? Infinity : aPos) - (bPos === -1 ? Infinity : bPos);
     });
 
-    return allDoctors;
+    // 3. Add isActive flag: true if AT LEAST ONE of the doctor's groups is expanded
+    return allDoctors.map(doctor => {
+      const active = (doctor.groups || []).some(group => !collapsed[group]);
+      return {
+        ...doctor,
+        isActive: active
+      };
+    });
   }, [users, collapsed, groupOrder]);
 
   const exportDays = useMemo(() => {
