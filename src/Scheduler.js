@@ -28,6 +28,7 @@ export default function Scheduler() {
   const [userPreferences, setUserPreferences] = useState({});
   const [selectedMonth, setSelectedMonth] = useState(0);
   const [viewMode, setViewMode] = useState('all'); // 'all' | 'weekends'
+  const [memories, setMemories] = useState({ M1: null, M2: null });
 
   const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
@@ -132,6 +133,23 @@ export default function Scheduler() {
     if (Object.keys(assignments).length === 0) return;
     setDoc(doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`), assignments);
   }, [assignments, targetQuarter, targetYear]);
+
+  // ==================== MEMORY SLOTS (temporary, per quarter) ====================
+  const MEMORY_KEY = `scheduler_mem_${targetYear}_Q${targetQuarter}`;
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem(MEMORY_KEY);
+    if (saved) {
+      setMemories(JSON.parse(saved));
+    } else {
+      setMemories({ M1: null, M2: null });
+    }
+  }, [targetYear, targetQuarter]); // reset when you change quarter
+
+  // Auto-save memories to sessionStorage
+  useEffect(() => {
+    sessionStorage.setItem(MEMORY_KEY, JSON.stringify(memories));
+  }, [memories, MEMORY_KEY]);
 
   const handlePrev = () => setCurrentQOffset(o => o - 1);
   const handleNext = () => setCurrentQOffset(o => o + 1);
@@ -335,7 +353,7 @@ export default function Scheduler() {
     };
   }, [assignments, userPreferences, days, getEffectiveStatus]);
 
-const exportPreferencesToTSV = () => {
+  const exportPreferencesToTSV = () => {
     let tsv = 'Datum\tDoktor\tZkratka\tPreference\n';
 
     // Projdeme všechny viditelné doktory
@@ -431,9 +449,9 @@ const exportPreferencesToTSV = () => {
       mladí: users['mladí'] || []
     };
 
-    // --- HELPER FUNCTIONS ---
+  // --- HELPER FUNCTIONS ---
 
-    // 1. Hard Constraint: 24h Buffer (no shifts on Day n-1 or Day n+1)
+  // 1. Hard Constraint: 24h Buffer (no shifts on Day n-1 or Day n+1)
     const hasAdjacentShift = (user, dateStr, currentAssigns) => {
       const d = new Date(dateStr);
       const prev = new Date(d); prev.setDate(prev.getDate() - 1);
@@ -548,6 +566,46 @@ const exportPreferencesToTSV = () => {
     }
   }, [assignments, days, users, userPreferences, weekendBlocks, getEffectiveStatus]);
 
+  const saveToMemory = (slot) => {
+    const savedAssignments = {};
+    exportDays.forEach(date => {
+      visibleUsers.forEach(u => {
+        const key = `${date}_${u.uid}`;
+        if (assignments[key]) savedAssignments[key] = assignments[key];
+      });
+    });
+
+    setMemories(prev => ({
+      ...prev,
+      [slot]: Object.keys(savedAssignments).length > 0 ? savedAssignments : null
+    }));
+
+    window.notify?.(`💾 Uloženo do ${slot} (${exportDays.length} dní)`, 'success');
+  };
+
+  const loadFromMemory = (slot) => {
+    const saved = memories[slot];
+    if (!saved) {
+      window.notify?.(`Žádné data v ${slot}`, 'warning');
+      return;
+    }
+
+    setAssignments(prev => {
+      const newAssign = { ...prev };
+      // Only overwrite current trimester days
+      exportDays.forEach(date => {
+        visibleUsers.forEach(u => {
+          const key = `${date}_${u.uid}`;
+          if (saved[key]) newAssign[key] = saved[key];
+          else delete newAssign[key]; // remove if not in saved memory
+        });
+      });
+      return newAssign;
+    });
+
+    window.notify?.(`📂 Načteno z ${slot}`, 'success');
+  };
+
   const exportToBIT = () => {
     let tsv = '';
 
@@ -569,7 +627,7 @@ const exportPreferencesToTSV = () => {
   };
 
   // ==================== UPDATED handleContextMenu (composite) ====================
-const handleContextMenu = useCallback(async (date, user) => {
+  const handleContextMenu = useCallback(async (date, user) => {
     const currentStatus = userPreferences[user.uid]?.[date] || null;
     const baseStatus = getBaseStatus(currentStatus);
     const effective = getEffectiveStatus(currentStatus);
@@ -896,6 +954,43 @@ const handleContextMenu = useCallback(async (date, user) => {
                 </div>
               );
             })}
+          </div>
+
+          {/* === MEMORY SLOTS === */}
+          <div className="mb-6">
+            <h4 className="text-sm font-semibold text-gray-600 mb-2">Dočasná paměť (M1 / M2)</h4>
+            <div className="flex gap-3">
+              {['M1', 'M2'].map(slot => {
+                const isOccupied = !!memories[slot];
+                return (
+                  <div key={slot} className="flex-1">
+                    <div className={cn(
+                      "text-xs font-bold px-3 py-1 rounded-t-lg text-center transition-colors",
+                      isOccupied ? "bg-green-600 text-white" : "bg-gray-200 text-gray-600"
+                    )}>
+                      {slot} {isOccupied && '✓'}
+                    </div>
+                    <div className="flex gap-px bg-gray-200 p-px rounded-b-lg">
+                      <button
+                        onClick={() => saveToMemory(slot)}
+                        className="flex-1 py-2 bg-white hover:bg-green-50 text-green-700 font-medium text-sm rounded-bl-lg transition"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => loadFromMemory(slot)}
+                        className="flex-1 py-2 bg-white hover:bg-blue-50 text-blue-700 font-medium text-sm rounded-br-lg transition"
+                      >
+                        Load
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-gray-500 mt-1 text-center">
+              Dočasné • zmizí po zavření prohlížeče
+            </p>
           </div>
 
           {/* === Exporty – teď tři tlačítka na jednom řádku === */}
