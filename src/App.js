@@ -96,8 +96,14 @@ function App() {
         const settingsRef = doc(db, 'settings', firebaseUser.uid);
         const settingsSnap = await getDoc(settingsRef);
 
-        // Pokud dokument neexistuje → vytvoříme ho s approved: false
+        // === AKTUALIZACE EMAILU POKAŽDÉ PŘI PŘIHLAŠENÍ ===
+        const updateData = {
+          email: cleanUser.email,
+          displayName: cleanUser.name
+        };
+
         if (!settingsSnap.exists()) {
+          // První přihlášení - vytvoříme celý dokument
           await setDoc(settingsRef, {
             firstName: cleanUser.given_name,
             lastName: cleanUser.family_name,
@@ -108,20 +114,18 @@ function App() {
             groups: [],
             approved: false,
             createdAt: new Date(),
-            email: cleanUser.email
+            ...updateData   // email + displayName
           });
         } else {
-          // Existující uživatel – aktualizujeme email (pro případ, že se objevil později)
-          if (cleanUser.email && !settingsSnap.data().email) {
-            await setDoc(settingsRef, { 
-              email: cleanUser.email,
-              displayName: cleanUser.name 
-            }, { merge: true });
+          // Existující uživatel - aktualizujeme email (i když už tam nějaký je)
+          if (cleanUser.email) {
+            await setDoc(settingsRef, updateData, { merge: true });
           }
         }
 
-        const currentData = settingsSnap.exists() ? settingsSnap.data() : {};
-        const approved = currentData.approved === true;
+        // Načteme aktuální data pro approved
+        const updatedSnap = await getDoc(settingsRef);
+        const approved = updatedSnap.exists() && updatedSnap.data().approved === true;
         setIsApproved(approved);
 
         if (!approved) {

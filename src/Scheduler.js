@@ -149,7 +149,7 @@ export default function Scheduler() {
   // Auto-save memories to sessionStorage
   useEffect(() => {
     sessionStorage.setItem(MEMORY_KEY, JSON.stringify(memories));
-  }, [memories, MEMORY_KEY]);
+  }, [memories]); // MEMORY_KEY se mění jen při změně kvartálu, takže ho můžeme vynechat
 
   const handlePrev = () => setCurrentQOffset(o => o - 1);
   const handleNext = () => setCurrentQOffset(o => o + 1);
@@ -777,20 +777,11 @@ export default function Scheduler() {
                     </td>
 
                     {visibleUsers.map(u => {
-                        const cellInfo = getCellClasses(date, u);
+                        //const cellInfo = getCellClasses(date, u);
                         const key = `${date}_${u.uid}`;
                         const assignedGroup = assignments[key];
                         const fullStatus = userPreferences[u.uid]?.[date];
                         const effective = getEffectiveStatus(fullStatus);
-
-                        let displayContent = '';
-                        if (assignedGroup) {
-                          displayContent = getDisplayLabel(assignedGroup);
-                        } else if (effective === 'unblocked') {
-                          displayContent = 'U';
-                        } else if (effective === 'blocked') {
-                          displayContent = 'BLOCK';
-                        }
 
                         return (
                           <td

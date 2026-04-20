@@ -95,7 +95,10 @@ export default function AdminPanel() {
                   />
                 </td>
                 <td>{u.firstName} {u.lastName}</td>
-                <td>{u.email || 'Není vyplněn'}</td>
+                <td>
+                  {u.email || '—'}
+                  {u.displayName && !u.email && <small> (z Google)</small>}
+                </td>
                 <td>
                   {['staří', 'střední', 'mladí'].map(g => (
                     <label key={g} className="adm-checkboxLabel">
