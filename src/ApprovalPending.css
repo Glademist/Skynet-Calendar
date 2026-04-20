@@ -1,0 +1,68 @@
+/* src/ApprovalPending.css */
+
+.approval-pending-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 80vh;
+  background-color: #f8f9fa;
+  padding: 20px;
+}
+
+.approval-card {
+  background: white;
+  padding: 50px 40px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  text-align: center;
+  max-width: 420px;
+  width: 100%;
+}
+
+.approval-icon {
+  font-size: 4.5rem;
+  margin-bottom: 20px;
+}
+
+.approval-card h1 {
+  color: #333;
+  margin-bottom: 20px;
+  font-size: 1.8rem;
+}
+
+.approval-card p {
+  color: #555;
+  line-height: 1.6;
+  margin-bottom: 25px;
+}
+
+.approval-info {
+  background-color: #f0f7ff;
+  padding: 18px;
+  border-radius: 8px;
+  margin: 25px 0;
+  text-align: left;
+  border-left: 4px solid #2196f3;
+}
+
+.approval-logout-btn {
+  background-color: #d32f2f;
+  color: white;
+  border: none;
+  padding: 14px 32px;
+  font-size: 1.1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-top: 10px;
+  transition: all 0.2s;
+}
+
+.approval-logout-btn:hover {
+  background-color: #b71c1c;
+}
+
+.approval-small {
+  margin-top: 25px;
+  font-size: 0.9rem;
+  color: #777;
+}

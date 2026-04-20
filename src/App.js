@@ -8,6 +8,7 @@ import Settings from './Settings';
 import Scheduler from './Scheduler';
 import AdminPanel from './AdminPanel';
 import NotificationBar from './NotificationBar';
+import ApprovalPending from './ApprovalPending';
 import { auth, db } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -69,22 +70,6 @@ const generateHolidays = () => {
   return holidays;
 };
 
-// Load user & choices
-const allowedEmails = [
-  "skaryd81@gmail.com", "david.kulisiak@gmail.com", "valenta.jiri.92@gmail.com",
-  "fidusmax@gmail.com", "palo.dotore@gmail.com", "verybery331@gmail.com",
-  "gaalka@me.com", "rgaalova@gmail.com", "jiri.graphy@gmail.com",
-  "krejm6ar@gmail.com", "pandvorak87@gmail.com", "tomasprochazka96@gmail.com",
-  "kl.pliskova@gmail.com", "inovec.ph@gmail.com", "surrogatereplacement@gmail.com",
-  "lidakoyuda@gmail.com", "martina.kepicova@gmail.com", "dave8srpen@gmail.com",
-  "vasek.salavec@gmail.com", "veronika.kavalkova@gmail.com", "zdenekhavlik9@gmail.com",
-  "zdenek.havlik@nemlib.cz", "jansibera88@gmail.com", "nmarkovicka@gmail.com",
-  "mudrakdominik@gmail.com", "durnovalida@gmail.com", "maresobarb@gmail.com",
-  "jiri.skach@gmail.com", "vojtech.hruby.jc@gmail.com", "pepazdepa.324@gmail.com",
-  "dr.zdarska@gmail.com", "kocmanova.ka@gmail.com", "brzulova.lucie@gmail.com",
-  "chirurggg@gmail.com"
-].map(e => e.toLowerCase());
-
 function App() {
   const [user, setUser] = useState(null);
   const [dayStyles, setDayStyles] = useState([]);
@@ -93,34 +78,45 @@ function App() {
   const holidays = generateHolidays();
   const [isApproved, setIsApproved] = useState(true); // výchozí true, aby se nezobrazil hned
 
-// Opravený useEffect s auth (přidej allowedEmails do dependency)
+// Opravený useEffect s auth
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         const cleanUser = {
           uid: firebaseUser.uid,
-          email: firebaseUser.email,
+          email: firebaseUser.email || null,
+          name: firebaseUser.displayName || '',
           given_name: firebaseUser.displayName?.split(' ')[0] || '',
           family_name: firebaseUser.displayName?.split(' ').slice(1).join(' ') || '',
-          name: firebaseUser.displayName || '',
           picture: firebaseUser.photoURL
         };
+
         setUser(cleanUser);
-        const docRef = doc(db, 'settings', firebaseUser.uid);
-        const docSnap = await getDoc(docRef);
 
-        const email = firebaseUser.email.toLowerCase();
-        if (!allowedEmails.includes(email)) {
-          setUser(null);
-          setView('blocked');
-          localStorage.setItem('blocked_email', firebaseUser.email);
-          return;
+        const settingsRef = doc(db, 'settings', firebaseUser.uid);
+        const settingsSnap = await getDoc(settingsRef);
+
+        // Pokud dokument neexistuje → vytvoříme ho s approved: false
+        if (!settingsSnap.exists()) {
+          await setDoc(settingsRef, {
+            firstName: cleanUser.given_name,
+            lastName: cleanUser.family_name,
+            shortcut: '',
+            weekdayShifts: 5,
+            weekendShifts: 2,
+            shiftInterval: 7,
+            groups: [],
+            approved: false,
+            createdAt: new Date(),
+            email: cleanUser.email
+          });
         }
-        const settingsSnap = await getDoc(docRef); // už máš docRef
-        setIsApproved(settingsSnap.data()?.approved || false);
 
-        if (!docSnap.exists()) {
-          setView('settings');
+        const approved = settingsSnap.exists() && settingsSnap.data().approved === true;
+        setIsApproved(approved);
+
+        if (!approved) {
+          setView('approvalPending');
         } else {
           setView('calendar');
         }
@@ -128,11 +124,13 @@ function App() {
         // Načti dayStyles
         const stylesRef = doc(db, 'dayStyles', firebaseUser.uid);
         const stylesSnap = await getDoc(stylesRef);
-        setDayStyles(stylesSnap.exists() ? stylesSnap.data().styles : []);
+        setDayStyles(stylesSnap.exists() ? stylesSnap.data().styles || [] : []);
+
       } else {
         setUser(null);
         setView('calendar');
         setDayStyles([]);
+        setIsApproved(true);
       }
     });
 
@@ -257,6 +255,7 @@ function App() {
       </div>
 
       <div className="app-mainContent">
+        {view === 'approvalPending' && user && <ApprovalPending user={user} />}
         {showSettingsWarning && (
           <div className="app-settingsWarning">
             ⚠️ DOKONČETE PROSÍM SVÁ NASTAVENÍ! 
