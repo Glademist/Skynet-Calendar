@@ -110,9 +110,18 @@ function App() {
             createdAt: new Date(),
             email: cleanUser.email
           });
+        } else {
+          // Existující uživatel – aktualizujeme email (pro případ, že se objevil později)
+          if (cleanUser.email && !settingsSnap.data().email) {
+            await setDoc(settingsRef, { 
+              email: cleanUser.email,
+              displayName: cleanUser.name 
+            }, { merge: true });
+          }
         }
 
-        const approved = settingsSnap.exists() && settingsSnap.data().approved === true;
+        const currentData = settingsSnap.exists() ? settingsSnap.data() : {};
+        const approved = currentData.approved === true;
         setIsApproved(approved);
 
         if (!approved) {
