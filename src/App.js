@@ -150,22 +150,6 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Načítání dayStyles z Firestore
-  useEffect(() => {
-    if (user) {
-      const loadDayStyles = async () => {
-        const stylesRef = doc(db, 'dayStyles', user.uid);
-        const snap = await getDoc(stylesRef);
-        if (snap.exists() && snap.data().styles) {
-          setDayStyles(snap.data().styles);
-        } else {
-          setDayStyles([]);
-        }
-      };
-      loadDayStyles();
-    }
-  }, [user]);
-
   useEffect(() => {
     // Po redirectu z Google – vynutíme refresh stavu
     const checkRedirect = async () => {
@@ -185,38 +169,28 @@ function App() {
     return () => window.removeEventListener('settingsSaved', handler);
   }, []);
 
-  // Save styles per user
-  useEffect(() => {
-    if (user && dayStyles.length > 0) {
-      localStorage.setItem(`dayStyles_${user.uid}`, JSON.stringify(dayStyles));
-    }
-  }, [dayStyles, user]);
+  const handleDateClick = async (arg) => {
+      if (!user) return;
 
-    const handleDateClick = async (arg) => {
-    if (!user) return;
+      const dateStr = arg.date.toLocaleDateString('en-CA');
+      const current = dayStyles.find(d => d.date === dateStr)?.status || 'available';
 
-    const dateStr = arg.date.toLocaleDateString('en-CA');
-    const current = dayStyles.find(d => d.date === dateStr)?.status || 'available';
+      const newStatus = current === 'available' ? 'not available' :
+                        current === 'not available' ? 'preferred' : 'available';
 
-    // NOVÉ POŘADÍ – přesně jak chceš
-    const newStatus = current === 'available'      ? 'not available'      :
-                      current === 'not available'      ? 'preferred' :  
-                                                      'available';    
+      const newStyles = [
+        ...dayStyles.filter(d => d.date !== dateStr),
+        { date: dateStr, status: newStatus }
+      ];
 
-    const newStyles = [
-      ...dayStyles.filter(d => d.date !== dateStr),
-      { date: dateStr, status: newStatus }
-    ];
+      setDayStyles(newStyles);
 
-    setDayStyles(newStyles);
-
-    // Uložení do Firestore
-    try {
-      await setDoc(doc(db, 'dayStyles', user.uid), { styles: newStyles });
-    } catch (err) {
-      console.error('Chyba při ukládání stylu dne:', err);
-    }
-  };
+      try {
+        await setDoc(doc(db, 'dayStyles', user.uid), { styles: newStyles });
+      } catch (err) {
+        console.error('Chyba při ukládání stylu dne:', err);
+      }
+    };
 
   const handleLogout = () => {
     signOut(auth);
