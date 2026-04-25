@@ -72,13 +72,14 @@ const generateHolidays = () => {
 
 function App() {
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [dayStyles, setDayStyles] = useState([]);
   const [showSettingsWarning, setShowSettingsWarning] = useState(false);
   const [view, setView] = useState('calendar'); // 'calendar' or 'settings'
   const holidays = generateHolidays();
   const [isApproved, setIsApproved] = useState(true); // výchozí true, aby se nezobrazil hned
 
-// Opravený useEffect s auth
+  // Opravený useEffect s auth
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -91,75 +92,73 @@ function App() {
           picture: firebaseUser.photoURL
         };
 
-        setUser(cleanUser);
+        // --- Settings ---
+        let settingsSnap;
+        try {
+          const settingsRef = doc(db, 'settings', firebaseUser.uid);
+          settingsSnap = await getDoc(settingsRef);
 
-        const settingsRef = doc(db, 'settings', firebaseUser.uid);
-        const settingsSnap = await getDoc(settingsRef);
+          const updateData = { email: cleanUser.email, displayName: cleanUser.name };
 
-        // === AKTUALIZACE EMAILU POKAŽDÉ PŘI PŘIHLAŠENÍ ===
-        const updateData = {
-          email: cleanUser.email,
-          displayName: cleanUser.name
-        };
-
-        if (!settingsSnap.exists()) {
-          // První přihlášení - vytvoříme celý dokument
-          await setDoc(settingsRef, {
-            firstName: cleanUser.given_name,
-            lastName: cleanUser.family_name,
-            shortcut: '',
-            weekdayShifts: 5,
-            weekendShifts: 2,
-            shiftInterval: 7,
-            groups: [],
-            approved: false,
-            createdAt: new Date(),
-            ...updateData   // email + displayName
-          });
-        } else {
-          // Existující uživatel - aktualizujeme email (i když už tam nějaký je)
-          if (cleanUser.email) {
-            await setDoc(settingsRef, updateData, { merge: true });
+          if (!settingsSnap.exists()) {
+            await setDoc(settingsRef, {
+              firstName: cleanUser.given_name,
+              lastName: cleanUser.family_name,
+              shortcut: '',
+              weekdayShifts: 5,
+              weekendShifts: 2,
+              shiftInterval: 7,
+              groups: [],
+              approved: false,
+              createdAt: new Date(),
+              ...updateData
+            }, { merge: true });
+            settingsSnap = await getDoc(settingsRef);
+          } else {
+            if (cleanUser.email) {
+              await setDoc(settingsRef, updateData, { merge: true });
+            }
           }
+
+          const approved = settingsSnap.exists() && settingsSnap.data().approved === true;
+          setIsApproved(approved);
+          setView(approved ? 'calendar' : 'approvalPending');
+
+        } catch (err) {
+          console.error('Settings read/write failed:', err);
+          setLoading(false);
+          return;
         }
 
-        // Načteme aktuální data pro approved
-        const updatedSnap = await getDoc(settingsRef);
-        const approved = updatedSnap.exists() && updatedSnap.data().approved === true;
-        setIsApproved(approved);
-
-        if (!approved) {
-          setView('approvalPending');
-        } else {
-          setView('calendar');
+        // --- dayStyles ---
+        try {
+          const stylesRef = doc(db, 'dayStyles', firebaseUser.uid);
+          const stylesSnap = await getDoc(stylesRef);
+          if (stylesSnap.exists()) {
+            setDayStyles(current => {
+              const incoming = stylesSnap.data().styles || [];
+              if (current.length > 0 && incoming.length === 0) return current;
+              return incoming;
+            });
+          }
+        } catch (err) {
+          console.error('dayStyles read failed:', err);
+          // Leave dayStyles as-is, don't wipe it
         }
 
-        // Načti dayStyles
-        const stylesRef = doc(db, 'dayStyles', firebaseUser.uid);
-        const stylesSnap = await getDoc(stylesRef);
-        setDayStyles(stylesSnap.exists() ? stylesSnap.data().styles || [] : []);
+        setUser(cleanUser);
+        setLoading(false);
 
       } else {
         setUser(null);
         setView('calendar');
         setDayStyles([]);
         setIsApproved(true);
+        setLoading(false);
       }
     });
 
     return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    // Po redirectu z Google – vynutíme refresh stavu
-    const checkRedirect = async () => {
-      const result = await getRedirectResult(auth);
-      if (result?.user) {
-        // Uživatel je přihlášený – vynutíme přepnutí
-        window.location.reload();
-      }
-    };
-    checkRedirect();
   }, []);
 
   // Listener na uložení nastavení (zůstává)
@@ -169,32 +168,47 @@ function App() {
     return () => window.removeEventListener('settingsSaved', handler);
   }, []);
 
-  const handleDateClick = async (arg) => {
-      if (!user) return;
+  const handleDateClick = (arg) => {
+    if (!user) return;
+    const dateStr = arg.date.toLocaleDateString('en-CA');
 
-      const dateStr = arg.date.toLocaleDateString('en-CA');
-      const current = dayStyles.find(d => d.date === dateStr)?.status || 'available';
-
+    setDayStyles(prev => {
+      const current = prev.find(d => d.date === dateStr)?.status || 'available';
       const newStatus = current === 'available' ? 'not available' :
                         current === 'not available' ? 'preferred' : 'available';
-
-      const newStyles = [
-        ...dayStyles.filter(d => d.date !== dateStr),
+      return [
+        ...prev.filter(d => d.date !== dateStr),
         { date: dateStr, status: newStatus }
       ];
+    });
+  };
 
-      setDayStyles(newStyles);
+  // Separate effect that writes to Firestore whenever dayStyles changes
+  useEffect(() => {
+    if (!user || dayStyles.length === 0) return;
+    setDoc(doc(db, 'dayStyles', user.uid), { styles: dayStyles })
+      .catch(err => console.error('Chyba při ukládání stylu dne:', err));
+  }, [dayStyles, user]);
 
-      try {
-        await setDoc(doc(db, 'dayStyles', user.uid), { styles: newStyles });
-      } catch (err) {
-        console.error('Chyba při ukládání stylu dne:', err);
-      }
-    };
 
   const handleLogout = () => {
     signOut(auth);
   };  
+
+  if (loading) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        fontSize: '1.2em',
+        color: '#666'
+      }}>
+        Načítám...
+      </div>
+    );
+  }
 
   if (!user) {
     return <Login />;

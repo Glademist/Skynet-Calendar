@@ -58,7 +58,7 @@ export default function Settings({ user, onSave, adminEditMode }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await setDoc(doc(db, 'settings', targetUid), form);
+      await setDoc(doc(db, 'settings', targetUid), form, { merge: true });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       onSave?.();
