@@ -10,9 +10,8 @@ import AdminPanel from './AdminPanel';
 import NotificationBar from './NotificationBar';
 import ApprovalPending from './ApprovalPending';
 import { auth, db } from './firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { getRedirectResult } from 'firebase/auth';
 import './App.css'
 
 // Easter calculation
@@ -57,8 +56,6 @@ const generateHolidays = () => {
     const easterMonday = new Date(easterSunday);
     easterMonday.setDate(easterSunday.getDate() + 1);
     holidays.push(
-      //{ title: 'Velký pátek', date: goodFriday.toISOString().split('T')[0], year },
-      //{ title: 'Velikonoční pondělí', date: easterMonday.toISOString().split('T')[0], year }
       { title: 'Velký pátek', date: goodFriday.toLocaleDateString('en-CA'), year },
       { title: 'Velikonoční pondělí', date: easterMonday.toLocaleDateString('en-CA'), year }
     );
@@ -74,15 +71,31 @@ function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dayStyles, setDayStyles] = useState([]);
-  const [showSettingsWarning, setShowSettingsWarning] = useState(false);
-  const [view, setView] = useState('calendar'); // 'calendar' or 'settings'
-  const holidays = generateHolidays();
-  const [isApproved, setIsApproved] = useState(true); // výchozí true, aby se nezobrazil hned
 
-  // Opravený useEffect s auth
+  // ============================================================
+  // CRITICAL: stylesLoaded gates ALL writes to dayStyles.
+  // - false on mount, false on auth change, false on read failure
+  // - only true after a successful read from Firestore
+  // - the writer effect refuses to fire while this is false
+  // - handleDateClick refuses to mutate state while this is false
+  // This is the primary defense against the data-loss bug where a
+  // failed initial read followed by a click would replace the entire
+  // dayStyles document with a single entry.
+  // ============================================================
+  const [stylesLoaded, setStylesLoaded] = useState(false);
+
+  const [showSettingsWarning, setShowSettingsWarning] = useState(false);
+  const [view, setView] = useState('calendar');
+  const holidays = generateHolidays();
+  const [isApproved, setIsApproved] = useState(true);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
+        // Reset the loaded flag on every auth change. We have not yet
+        // confirmed a successful read for this user.
+        setStylesLoaded(false);
+
         const cleanUser = {
           uid: firebaseUser.uid,
           email: firebaseUser.email || null,
@@ -110,7 +123,7 @@ function App() {
               shiftInterval: 7,
               groups: [],
               approved: false,
-              createdAt: new Date(),
+              createdAt: serverTimestamp(),
               ...updateData
             }, { merge: true });
             settingsSnap = await getDoc(settingsRef);
@@ -126,33 +139,47 @@ function App() {
 
         } catch (err) {
           console.error('Settings read/write failed:', err);
+          window.notify?.('Nepodařilo se načíst nastavení. Zkuste obnovit stránku.', 'error');
           setLoading(false);
           return;
         }
 
         // --- dayStyles ---
+        // The contract here is strict:
+        //   - read succeeds with data  -> setDayStyles(incoming),  stylesLoaded = true
+        //   - read succeeds, no doc    -> setDayStyles([]),        stylesLoaded = true
+        //   - read fails (network/etc) -> leave dayStyles as-is,   stylesLoaded = false
+        //
+        // While stylesLoaded is false, the writer effect below will not run
+        // and handleDateClick will not mutate state. This is what prevents
+        // the "click after failed load wipes everything" bug.
         try {
           const stylesRef = doc(db, 'dayStyles', firebaseUser.uid);
           const stylesSnap = await getDoc(stylesRef);
           if (stylesSnap.exists()) {
-            setDayStyles(current => {
-              const incoming = stylesSnap.data().styles || [];
-              if (current.length > 0 && incoming.length === 0) return current;
-              return incoming;
-            });
+            setDayStyles(stylesSnap.data().styles || []);
+          } else {
+            setDayStyles([]);
           }
+          setStylesLoaded(true);
         } catch (err) {
           console.error('dayStyles read failed:', err);
-          // Leave dayStyles as-is, don't wipe it
+          // Critical: do NOT set stylesLoaded = true. Keep writes blocked.
+          window.notify?.(
+            'Nepodařilo se načíst preference dnů. Obnovte stránku před úpravami!',
+            'error'
+          );
         }
 
         setUser(cleanUser);
         setLoading(false);
 
       } else {
+        // Logged out: clear everything, reset gate.
         setUser(null);
         setView('calendar');
         setDayStyles([]);
+        setStylesLoaded(false);
         setIsApproved(true);
         setLoading(false);
       }
@@ -161,7 +188,7 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Listener na uložení nastavení (zůstává)
+  // Listener for settings save event
   useEffect(() => {
     const handler = () => setShowSettingsWarning(false);
     window.addEventListener('settingsSaved', handler);
@@ -170,6 +197,20 @@ function App() {
 
   const handleDateClick = (arg) => {
     if (!user) return;
+
+    // Hard gate: refuse to mutate dayStyles until we've successfully loaded.
+    // Without this guard, a click before/after a failed initial read would
+    // generate a state of length 1, the writer effect would fire, and the
+    // entire stored document would be replaced. This is exactly the bug
+    // that wiped two users' data previously.
+    if (!stylesLoaded) {
+      window.notify?.(
+        'Data se ještě načítají. Počkejte chvíli nebo obnovte stránku.',
+        'warning'
+      );
+      return;
+    }
+
     const dateStr = arg.date.toLocaleDateString('en-CA');
 
     setDayStyles(prev => {
@@ -183,17 +224,61 @@ function App() {
     });
   };
 
-  // Separate effect that writes to Firestore whenever dayStyles changes
+  // Writer effect: persists dayStyles to Firestore.
+  //
+  // This effect ONLY fires when:
+  //   1. user is set (we know who we're writing for)
+  //   2. stylesLoaded is true (we have confirmed what was on the server)
+  //
+  // Layer 3 of the defense: even after we've loaded, if the about-to-write
+  // payload is dramatically smaller than what's currently on the server,
+  // we treat it as suspicious and re-read before deciding. This catches
+  // any future bug class where state gets nuked through a different path.
   useEffect(() => {
-    if (!user || dayStyles.length === 0) return;
-    setDoc(doc(db, 'dayStyles', user.uid), { styles: dayStyles })
-      .catch(err => console.error('Chyba při ukládání stylu dne:', err));
-  }, [dayStyles, user]);
+    if (!user || !stylesLoaded) return;
 
+    let cancelled = false;
+    const persist = async () => {
+      try {
+        const stylesRef = doc(db, 'dayStyles', user.uid);
+
+        // Sanity check: refuse to write a much-smaller payload without
+        // re-confirming. Threshold: if we'd be removing more than half
+        // of a non-trivial number of entries, re-read first.
+        if (dayStyles.length < 5) {
+          const existing = await getDoc(stylesRef);
+          const existingLen = existing.exists()
+            ? (existing.data().styles?.length || 0)
+            : 0;
+
+          if (existingLen >= 10 && dayStyles.length < existingLen / 2) {
+            console.error(
+              'Refusing to shrink dayStyles dramatically without confirmation',
+              { existing: existingLen, attempting: dayStyles.length }
+            );
+            window.notify?.(
+              `Pozor: pokus o smazání ${existingLen - dayStyles.length} dnů zablokován. Obnovte stránku.`,
+              'error'
+            );
+            return;
+          }
+        }
+
+        if (cancelled) return;
+        await setDoc(stylesRef, { styles: dayStyles });
+      } catch (err) {
+        console.error('Chyba při ukládání stylu dne:', err);
+        window.notify?.('Uložení selhalo. Změny nejsou uložené.', 'error');
+      }
+    };
+
+    persist();
+    return () => { cancelled = true; };
+  }, [dayStyles, user, stylesLoaded]);
 
   const handleLogout = () => {
     signOut(auth);
-  };  
+  };
 
   if (loading) {
     return (
@@ -218,34 +303,34 @@ function App() {
 
   return (
     <div className="app-layout">
-        <div className="app-header">
-          <nav className="app-navMenu">
-            <button
-              className={view === 'calendar' ? "app-navActive" : ''}
-              onClick={() => setView('calendar')}
-            >
-              Kalendář
+      <div className="app-header">
+        <nav className="app-navMenu">
+          <button
+            className={view === 'calendar' ? "app-navActive" : ''}
+            onClick={() => setView('calendar')}
+          >
+            Kalendář
+          </button>
+          <button
+            className={view === 'settings' ? "app-navActive" : ''}
+            onClick={() => setView('settings')}
+          >
+            Nastavení
+          </button>
+          {isAdmin && (
+            <button className={view === 'scheduler' ? "app-navActive" : ''} onClick={() => setView('scheduler')}>
+              Plánovač
             </button>
+          )}
+          {isAdmin && (
             <button
-              className={view === 'settings' ? "app-navActive" : ''}
-              onClick={() => setView('settings')}
+              className={view === 'admin' ? "app-navActive" : ''}
+              onClick={() => setView('admin')}
             >
-              Nastavení
+              Admin
             </button>
-            {isAdmin && (
-              <button className={view === 'scheduler' ? "app-navActive" : ''} onClick={() => setView('scheduler')}>
-                Plánovač
-              </button>
-            )}            
-            {isAdmin && (
-              <button
-                className={view === 'admin' ? "app-navActive" : ''}
-                onClick={() => setView('admin')}
-              >
-                Admin
-              </button>
-            )}
-          </nav>
+          )}
+        </nav>
 
         <div className="app-userInfo">
           <span className="app-userName">{user.name}</span>
@@ -259,8 +344,8 @@ function App() {
         {view === 'approvalPending' && user && <ApprovalPending user={user} />}
         {showSettingsWarning && (
           <div className="app-settingsWarning">
-            ⚠️ DOKONČETE PROSÍM SVÁ NASTAVENÍ! 
-            <button 
+            ⚠️ DOKONČETE PROSÍM SVÁ NASTAVENÍ!
+            <button
               onClick={() => setView('settings')}
               style={{ marginLeft: '15px', background: 'white', color: '#d32f2f', padding: '8px 16px', border: 'none', borderRadius: '4px', fontWeight: 'bold' }}
             >
@@ -271,43 +356,75 @@ function App() {
             </div>
           </div>
         )}
-        {view === 'calendar' && (
-          <div className="app-calendarContainer">  {/* ← NOVÝ WRAPPER */}
-          <FullCalendar
-            plugins={[dayGridPlugin, interactionPlugin]}
-            initialView="dayGridMonth"
-            firstDay={1}
-            height="100%"
-            contentHeight="100%"
-            fixedWeekCount={false}
-            locales={[csLocale]}
-            locale="cs"
-            dateClick={handleDateClick}
-            dayCellClassNames={(arg) => {
-              const dateStr = arg.date.toLocaleDateString('en-CA'); // ← stejné jako v holidays
-              const status = dayStyles.find(d => d.date === dateStr)?.status || 'available';
-              const isWeekend = [0, 6].includes(arg.date.getDay());
-              const isHoliday = holidays.some(h => h.date === dateStr);
-              const isCurrentMonth = arg.view.currentStart.getMonth() === arg.date.getMonth();
-              return `status-${status.replace(' ', '-')}${isWeekend || isHoliday ? ' special-day' : ''}${isCurrentMonth ? '' : ' non-current'}`;
-            }}
 
-            dayCellContent={(arg) => {
-              const dateStr = arg.date.toLocaleDateString('en-CA');
-              const holiday = holidays.find(h => h.date === dateStr);
-              const holidayHtml = holiday
-                ? `<div class="app-holidayLabel">${holiday.title}</div>`
-                : '';
-              return {
-                html: `
-                  <div class="app-dayContent">
-                    <div class="app-dayNumber">${arg.dayNumberText}</div>
-                    ${holidayHtml}
-                  </div>
-                `
-              };
-            }}
-          />
+        {/* Visual indicator that the calendar is in a read-only state because
+            dayStyles failed to load. The user can still see the calendar but
+            clicks won't do anything (handleDateClick gates on stylesLoaded). */}
+        {view === 'calendar' && user && isApproved && !stylesLoaded && (
+          <div style={{
+            background: '#fff3cd',
+            color: '#856404',
+            padding: '12px 16px',
+            borderLeft: '4px solid #ffc107',
+            margin: '8px 16px',
+            borderRadius: '4px',
+            fontSize: '0.95em'
+          }}>
+            ⚠️ Preference dnů se nepodařilo načíst. Kalendář je v režimu jen pro čtení.
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                marginLeft: '15px',
+                background: '#ffc107',
+                color: '#333',
+                padding: '6px 14px',
+                border: 'none',
+                borderRadius: '4px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              Obnovit stránku
+            </button>
+          </div>
+        )}
+
+        {view === 'calendar' && (
+          <div className="app-calendarContainer">
+            <FullCalendar
+              plugins={[dayGridPlugin, interactionPlugin]}
+              initialView="dayGridMonth"
+              firstDay={1}
+              height="100%"
+              contentHeight="100%"
+              fixedWeekCount={false}
+              locales={[csLocale]}
+              locale="cs"
+              dateClick={handleDateClick}
+              dayCellClassNames={(arg) => {
+                const dateStr = arg.date.toLocaleDateString('en-CA');
+                const status = dayStyles.find(d => d.date === dateStr)?.status || 'available';
+                const isWeekend = [0, 6].includes(arg.date.getDay());
+                const isHoliday = holidays.some(h => h.date === dateStr);
+                const isCurrentMonth = arg.view.currentStart.getMonth() === arg.date.getMonth();
+                return `status-${status.replace(' ', '-')}${isWeekend || isHoliday ? ' special-day' : ''}${isCurrentMonth ? '' : ' non-current'}`;
+              }}
+              dayCellContent={(arg) => {
+                const dateStr = arg.date.toLocaleDateString('en-CA');
+                const holiday = holidays.find(h => h.date === dateStr);
+                const holidayHtml = holiday
+                  ? `<div class="app-holidayLabel">${holiday.title}</div>`
+                  : '';
+                return {
+                  html: `
+                    <div class="app-dayContent">
+                      <div class="app-dayNumber">${arg.dayNumberText}</div>
+                      ${holidayHtml}
+                    </div>
+                  `
+                };
+              }}
+            />
           </div>
         )}
 
@@ -315,34 +432,34 @@ function App() {
           <Settings user={user} onSave={() => setView('calendar')} />
         )}
         {view === 'scheduler' && isAdmin && (
-          <div className="scheduler-container">  {/* ← NOVÝ WRAPPER */}
-          <Scheduler />
+          <div className="scheduler-container">
+            <Scheduler />
           </div>
-          )}
+        )}
         {view === 'admin' && isAdmin && <AdminPanel />}
         {view === 'blocked' && (
-        <div className="app-blockedEmail">
-          <h1>POZOR – NEOČEKÁVANÝ EMAIL!</h1>
-          <p><strong>{localStorage.getItem('blocked_email')}</strong></p>
-          <p>Tento email není v seznamu povolených uživatelů.</p>
           <div className="app-blockedEmail">
-            {localStorage.getItem('blocked_email')}
+            <h1>POZOR – NEOČEKÁVANÝ EMAIL!</h1>
+            <p><strong>{localStorage.getItem('blocked_email')}</strong></p>
+            <p>Tento email není v seznamu povolených uživatelů.</p>
+            <div className="app-blockedEmail">
+              {localStorage.getItem('blocked_email')}
+            </div>
+            <p><strong>Data se NEULOŽÍ a budou ztracena!</strong></p>
+            <p>Odhlaste se a přihlaste se pod správným Google účtem nebo volejte.</p>
+            <button
+              onClick={() => signOut(auth)}
+              style={{ padding: '15px 30px', fontSize: '1.2em', marginTop: '20px' }}
+            >
+              Odhlásit se
+            </button>
           </div>
-          <p><strong>Data se NEULOŽÍ a budou ztracena!</strong></p>
-          <p>Odhlaste se a přihlaste se pod správným Google účtem nebo volejte.</p>
-          <button 
-            onClick={() => signOut(auth)} 
-            style={{padding: '15px 30px', fontSize: '1.2em', marginTop: '20px'}}
-          >
-            Odhlásit se
-          </button>
-        </div>
         )}
         {user && !isApproved && view !== 'blocked' && (
           <div className="app-approvalWarning">
             ⚠️ Váš účet čeká na schválení adminem!
-            <br/>
-            <small style={{fontSize: '0.9em', opacity: 0.9}}>
+            <br />
+            <small style={{ fontSize: '0.9em', opacity: 0.9 }}>
               Prosím, počkejte na schválení. Do té doby nemůžete plánovat služby.
             </small>
           </div>

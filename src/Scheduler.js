@@ -29,6 +29,7 @@ export default function Scheduler() {
   const [selectedMonth, setSelectedMonth] = useState(0);
   const [viewMode, setViewMode] = useState('all'); // 'all' | 'weekends'
   const [memories, setMemories] = useState({ M1: null, M2: null });
+  const [assignmentsLoaded, setAssignmentsLoaded] = useState(false); 
 
   const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
@@ -69,6 +70,7 @@ export default function Scheduler() {
 
   // ==================== NAČTENÍ DAT ====================
   useEffect(() => {
+    setAssignmentsLoaded(false);
     const fetchData = async () => {
       const snapshot = await getDocs(collection(db, 'settings'));
       const allUsers = snapshot.docs.map(d => ({ uid: d.id, ...d.data() }));
@@ -123,6 +125,7 @@ export default function Scheduler() {
 
       const snap = await getDoc(doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`));
       setAssignments(snap.exists() ? snap.data() : {});
+      setAssignmentsLoaded(true);
     };
 
     fetchData();
@@ -130,9 +133,9 @@ export default function Scheduler() {
 
   // uložení změn
   useEffect(() => {
-    if (Object.keys(assignments).length === 0) return;
+    if (!assignmentsLoaded) return;
     setDoc(doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`), assignments);
-  }, [assignments, targetQuarter, targetYear]);
+  }, [assignments, targetQuarter, targetYear, assignmentsLoaded]);
 
   // ==================== MEMORY SLOTS (temporary, per quarter) ====================
   const MEMORY_KEY = `scheduler_mem_${targetYear}_Q${targetQuarter}`;
