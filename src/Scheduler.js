@@ -6,6 +6,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  deleteDoc,
 } from 'firebase/firestore';
 import { generateHolidays } from './utils';
 import './Scheduler.css';
@@ -29,7 +30,33 @@ export default function Scheduler() {
   const [selectedMonth, setSelectedMonth] = useState(0);
   const [viewMode, setViewMode] = useState('all'); // 'all' | 'weekends'
   const [memories, setMemories] = useState({ M1: null, M2: null });
-  const [assignmentsLoaded, setAssignmentsLoaded] = useState(false); 
+  const [assignmentsLoaded, setAssignmentsLoaded] = useState(false);
+
+  // Per-quarter doctor commentary. Doctors write a short free-text note in
+  // their Settings tab scoped to a specific quarter (e.g. "Prefer either
+  // 31.7+2.8 OR 7.8+9.8, not both"). Admin reads via tooltip on the doctor's
+  // name in the table header. Stored at quarterNotes/{year}_Q{quarter} with
+  // shape { uid: text }. Sibling of dayStyles, but per-quarter free text
+  // rather than per-day status.
+  const [quarterNotes, setQuarterNotes] = useState({});
+  const [editingNoteUid, setEditingNoteUid] = useState(null);
+  const [editingNoteText, setEditingNoteText] = useState('');
+
+  // One-shot undo for "Vymazat služby". When the user clears assignments
+  // for the active (expanded) groups, the deleted slice is snapshotted to
+  // assignmentsBackups/{year}_Q{quarter} and held in this state so the
+  // Restore button can render conditionally without an extra read on click.
+  // Overwritten on each clear; cleared after a successful restore.
+  const [lastClearBackup, setLastClearBackup] = useState(null);
+
+  // Quarter fixation = write-protect flag on the entire quarter. When fixed,
+  // ALL mutation paths refuse to fire (cell click, auto-weekends, clear,
+  // restore, memory load, the auto-save useEffect itself as last resort).
+  // Optimizer.applyToFirestore checks the same flag independently.
+  // Persisted at quarterFixed/{year}_Q{quarter} as { fixedAt, fixedBy }.
+  // Doc presence = fixed; doc absence = editable.
+  const [fixation, setFixation] = useState(null);   // null = not fixed; { fixedAt, fixedBy }
+  const isFixed = fixation !== null;
 
   const groupOrder = useMemo(() => ['staří', 'střední', 'mladí'], []);
   const groupLabel = useMemo(() => ({ staří: 'S', střední: 'M', mladí: 'J' }), []);
@@ -126,16 +153,234 @@ export default function Scheduler() {
       const snap = await getDoc(doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`));
       setAssignments(snap.exists() ? snap.data() : {});
       setAssignmentsLoaded(true);
+
+      // Quarter notes — independent doc, one read per quarter change.
+      const notesSnap = await getDoc(doc(db, 'quarterNotes', `${targetYear}_Q${targetQuarter}`));
+      setQuarterNotes(notesSnap.exists() ? notesSnap.data() : {});
     };
 
     fetchData();
   }, [currentQOffset, groupOrder, qStartMonth, targetQuarter, targetYear]);
 
-  // uložení změn
+  // Load last-clear backup for the current quarter so the "Obnovit" button
+  // can render without an extra read on click. Re-runs on quarter change so
+  // navigating Q3→Q4 hides Q3's restore button (each quarter has its own
+  // single-slot backup). The `cells` presence check guards against an empty
+  // doc left behind by a successful restore.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const snap = await getDoc(
+        doc(db, 'assignmentsBackups', `${targetYear}_Q${targetQuarter}`)
+      );
+      if (cancelled) return;
+      const data = snap.exists() ? snap.data() : null;
+      setLastClearBackup(data && data.cells ? data : null);
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [targetYear, targetQuarter]);
+
+  // Load fixation status for the current quarter. Doc presence = fixed.
+  // Re-runs on quarter change so navigating Q3 (fixed) → Q4 (free) flips
+  // the gates correctly. Failure is treated as "not fixed" — that's the
+  // safer default for usability; a write-time check on Firestore would
+  // catch a real edit attempt anyway via security rules (when those exist).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const snap = await getDoc(
+          doc(db, 'quarterFixed', `${targetYear}_Q${targetQuarter}`)
+        );
+        if (cancelled) return;
+        setFixation(snap.exists() ? snap.data() : null);
+      } catch (e) {
+        console.error('Fixation load failed:', e);
+        if (!cancelled) setFixation(null);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [targetYear, targetQuarter]);
+
+  // Toggle fixation. Both directions require explicit confirmation —
+  // fixating to prevent surprise lockdown, unfixating to prevent
+  // accidental edits during review.
+  const toggleFixation = useCallback(async () => {
+    const refQ = doc(db, 'quarterFixed', `${targetYear}_Q${targetQuarter}`);
+    if (isFixed) {
+      const ok = window.confirm(
+        `Odfixovat Q${targetQuarter}/${targetYear}?\n\n` +
+        `Po odfixování budou opět aktivní:\n` +
+        `  • klik na buňku\n  • Vymazat / Obnovit\n  • Memory Load\n  • Auto Weekends\n  • Optimalizátor → Aplikovat`
+      );
+      if (!ok) return;
+      try {
+        await deleteDoc(refQ);
+        setFixation(null);
+        window.notify?.(`Q${targetQuarter}/${targetYear} odfixováno.`, 'success');
+      } catch (e) {
+        console.error('Unfix failed:', e);
+        window.alert('Odfixování selhalo: ' + (e.message || e));
+      }
+    } else {
+      const ok = window.confirm(
+        `Zafixovat Q${targetQuarter}/${targetYear}?\n\n` +
+        `Po zafixování nebude možné kvartál editovat — ani klikem do tabulky, ` +
+        `ani Vymazáním, ani Optimalizátorem. Pro úpravy bude třeba nejdřív odfixovat.`
+      );
+      if (!ok) return;
+      const payload = {
+        fixedAt: new Date().toISOString(),
+        fixedBy: 'admin',   // TODO: pass user.email through props if needed for audit
+      };
+      try {
+        await setDoc(refQ, payload);
+        setFixation(payload);
+        window.notify?.(`Q${targetQuarter}/${targetYear} zafixováno. Edity blokovány.`, 'success');
+      } catch (e) {
+        console.error('Fix failed:', e);
+        window.alert('Zafixování selhalo: ' + (e.message || e));
+      }
+    }
+  }, [isFixed, targetYear, targetQuarter]);
+
+  // Admin edit of someone else's note (or the admin's own).
+  // Doctors edit their own note via Settings.js; this is the admin shortcut
+  // for capturing what a doctor said verbally.
+  const saveQuarterNote = useCallback(async (uid, text) => {
+    const trimmed = text.trim();
+    const ref = doc(db, 'quarterNotes', `${targetYear}_Q${targetQuarter}`);
+    const next = { ...quarterNotes };
+    if (trimmed) {
+      next[uid] = trimmed;
+    } else {
+      delete next[uid];
+    }
+    setQuarterNotes(next);
+    await setDoc(ref, next);   // full replace — small doc, simpler than merge+delete dance
+    setEditingNoteUid(null);
+    setEditingNoteText('');
+  }, [quarterNotes, targetYear, targetQuarter]);
+
+  // ── Clear assignments + one-shot Restore ────────────────────────────────
+  // Scope = expanded groups (collapsed[g] is falsy). Cells in collapsed
+  // groups survive untouched. Backup is written to Firestore BEFORE the
+  // wipe so a crash mid-clear leaves us recoverable. The auto-save useEffect
+  // below propagates `setAssignments(next)` to assignments/{year}_Q{quarter}.
+  const clearAssignments = useCallback(async () => {
+    if (isFixed) {
+      window.alert(`Q${targetQuarter}/${targetYear} je zafixováno (🔒). Pro mazání nejdřív odfixovat.`);
+      return;
+    }
+    const scope = groupOrder.filter(g => !collapsed[g]);
+    if (scope.length === 0) {
+      window.alert('Žádné aktivní (rozbalené) skupiny. Rozbal alespoň jednu.');
+      return;
+    }
+
+    const toDelete = {};
+    for (const [key, val] of Object.entries(assignments)) {
+      if (scope.includes(getBaseGroup(val))) {
+        toDelete[key] = val;
+      }
+    }
+    const count = Object.keys(toDelete).length;
+    if (count === 0) {
+      window.alert(`Skupiny ${scope.join(', ')} nemají žádné přiřazené služby.`);
+      return;
+    }
+
+    const collapsedList = groupOrder.filter(g => collapsed[g]);
+    const ok = window.confirm(
+      `Opravdu vymazat ${count} služeb pro Q${targetQuarter} ${targetYear}?\n\n` +
+      `Skupiny: ${scope.join(', ')}\n` +
+      `Sbalené (zachovány): ${collapsedList.length ? collapsedList.join(', ') : '(žádné)'}\n\n` +
+      `Záloha bude přepsána. Předchozí "Obnovit" už nebude funkční.`
+    );
+    if (!ok) return;
+
+    const backup = {
+      cells: toDelete,
+      scope,
+      clearedAt: new Date().toISOString(),
+      count,
+    };
+    try {
+      await setDoc(
+        doc(db, 'assignmentsBackups', `${targetYear}_Q${targetQuarter}`),
+        backup
+      );
+    } catch (err) {
+      console.error('Backup write failed:', err);
+      window.alert('Záloha selhala. Mazání zrušeno.');
+      return;
+    }
+
+    const next = { ...assignments };
+    for (const key of Object.keys(toDelete)) delete next[key];
+    setAssignments(next);
+    setLastClearBackup(backup);
+
+    window.notify?.(`Smazáno ${count} služeb. Lze obnovit.`, 'success');
+  }, [assignments, collapsed, groupOrder, targetQuarter, targetYear, getBaseGroup, isFixed]);
+
+  // Restore re-merges the backed-up cells into assignments. If the user
+  // assigned new cells in the same slots after clearing, the backup wins
+  // (last-clear undo, not a smart merge). The backup slot is wiped to an
+  // empty doc afterward; the load effect's `cells` check treats that as
+  // "no backup" so the button hides on next mount/quarter-switch.
+  const restoreLastClear = useCallback(async () => {
+    if (!lastClearBackup) return;
+    if (isFixed) {
+      window.alert(`Q${targetQuarter}/${targetYear} je zafixováno (🔒). Pro obnovu nejdřív odfixovat.`);
+      return;
+    }
+    const { cells, scope, count } = lastClearBackup;
+
+    let conflicts = 0;
+    for (const key of Object.keys(cells)) {
+      if (assignments[key]) conflicts++;
+    }
+
+    const ok = window.confirm(
+      `Obnovit ${count} smazaných služeb (skupiny: ${scope.join(', ')})?\n\n` +
+      (conflicts > 0
+        ? `POZOR: ${conflicts} buněk je nyní obsazeno — budou přepsány.\n\n`
+        : '') +
+      `Záloha bude smazána.`
+    );
+    if (!ok) return;
+
+    const next = { ...assignments, ...cells };
+    setAssignments(next);
+
+    try {
+      await setDoc(
+        doc(db, 'assignmentsBackups', `${targetYear}_Q${targetQuarter}`),
+        {} // empty doc; load effect's `data.cells` check treats as no backup
+      );
+    } catch (err) {
+      console.error('Backup clear failed:', err);
+      // Non-fatal — restore already happened in state.
+    }
+    setLastClearBackup(null);
+
+    window.notify?.(`Obnoveno ${count} služeb.`, 'success');
+  }, [assignments, lastClearBackup, targetQuarter, targetYear, isFixed]);
+
+  // uložení změn — last-line-of-defense gate against fixation. Every
+  // user-action handler that mutates `assignments` already early-returns
+  // when isFixed, but if a future code path forgets to check, this gate
+  // prevents the auto-save from clobbering Firestore. State and Firestore
+  // can briefly diverge in that scenario; the next quarter-load will
+  // refresh from Firestore as ground truth.
   useEffect(() => {
     if (!assignmentsLoaded) return;
+    if (isFixed) return;
     setDoc(doc(db, 'assignments', `${targetYear}_Q${targetQuarter}`), assignments);
-  }, [assignments, targetQuarter, targetYear, assignmentsLoaded]);
+  }, [assignments, targetQuarter, targetYear, assignmentsLoaded, isFixed]);
 
   // ==================== MEMORY SLOTS (temporary, per quarter) ====================
   const MEMORY_KEY = `scheduler_mem_${targetYear}_Q${targetQuarter}`;
@@ -147,12 +392,12 @@ export default function Scheduler() {
     } else {
       setMemories({ M1: null, M2: null });
     }
-  }, [targetYear, targetQuarter]); // reset when you change quarter
+  }, [targetYear, targetQuarter, MEMORY_KEY]); // reset when you change quarter
 
   // Auto-save memories to sessionStorage
   useEffect(() => {
     sessionStorage.setItem(MEMORY_KEY, JSON.stringify(memories));
-  }, [memories]); // MEMORY_KEY se mění jen při změně kvartálu, takže ho můžeme vynechat
+  }, [memories], MEMORY_KEY); // MEMORY_KEY se mění jen při změně kvartálu, takže ho můžeme vynechat
 
   const handlePrev = () => setCurrentQOffset(o => o - 1);
   const handleNext = () => setCurrentQOffset(o => o + 1);
@@ -162,6 +407,10 @@ export default function Scheduler() {
   }, []);
 
   const handleCellClick = useCallback((date, user) => {
+    if (isFixed) {
+      window.notify?.(`Q${targetQuarter}/${targetYear} je zafixováno (🔒). Pro úpravy nejdřív odfixovat.`, 'warning');
+      return;
+    }
     const key = `${date}_${user.uid}`;
     const current = assignments[key];
     const fullStatus = userPreferences[user.uid]?.[date];
@@ -200,7 +449,7 @@ export default function Scheduler() {
       setAssignments(prev => ({ ...prev, [key]: next }));
       window.notify?.(`${user.shortcut} → ${getDisplayLabel(next)}`, 'success');
     }
-  }, [assignments, userPreferences, getBaseGroup, getDisplayLabel, getEffectiveStatus]);
+  }, [assignments, userPreferences, getBaseGroup, getDisplayLabel, getEffectiveStatus, isFixed, targetQuarter, targetYear]);
 
   const exportToTSV = () => {
     let tsv = 'Datum\t';
@@ -449,6 +698,10 @@ export default function Scheduler() {
   }, [days]);  
   
   const autoAssignWeekends = useCallback(async () => {
+    if (isFixed) {
+      window.alert(`Q${targetQuarter}/${targetYear} je zafixováno (🔒). Pro Auto Weekends nejdřív odfixovat.`);
+      return;
+    }
     if (!window.confirm('Spustit Auto Weekends?\n\nPřiřadí víkendy dle priorit: 24h buffer (striktní) -> max 1 směna za víkend -> střídání víkendů.')) return;
 
     let newAssignments = { ...assignments };
@@ -576,7 +829,7 @@ export default function Scheduler() {
     } else {
       window.notify?.(`Hotovo! Přiřazeno ${changes} víkendových služeb bez porušení pravidel.`, 'success');
     }
-  }, [assignments, days, users, userPreferences, weekendBlocks, getEffectiveStatus]);
+  }, [assignments, days, users, userPreferences, weekendBlocks, getEffectiveStatus, isFixed, targetQuarter, targetYear]);
 
   const saveToMemory = (slot) => {
     const savedAssignments = {};
@@ -596,6 +849,10 @@ export default function Scheduler() {
   };
 
   const loadFromMemory = (slot) => {
+    if (isFixed) {
+      window.notify?.(`Q${targetQuarter}/${targetYear} je zafixováno (🔒). Memory Load by přepsal data — nejdřív odfixovat.`, 'warning');
+      return;
+    }
     const saved = memories[slot];
     if (!saved) {
       window.notify?.(`Žádné data v ${slot}`, 'warning');
@@ -705,19 +962,39 @@ export default function Scheduler() {
             <thead className="sticky top-0 bg-blue-700 text-white z-20">
               <tr>
                   <th className="text-left pl-3 py- py-0 h-6 w-20 sticky left-0 bg-blue-700 z-30 text-xs font-semibold text-white">Datum</th>
-                  {visibleUsers.map(u => (
-                    <th 
-                      key={u.uid} 
-                      className={cn(
-                        "py-0 h-6 text-xs font-semibold transition-colors",
-                        u.isActive 
-                          ? "text-white bg-blue-700" 
-                          : "text-gray-400 bg-gray-600 opacity-70"
-                      )}
-                    >
-                      {u.shortcut}
-                    </th>
-                  ))}
+                  {visibleUsers.map(u => {
+                    const note = quarterNotes[u.uid];
+                    const hasNote = !!(note && note.trim());
+                    // Build the tooltip: limits/interval first (always visible),
+                    // then the note when present. \n becomes a real line break in
+                    // the browser's native tooltip.
+                    const wd   = (u.weekdayShifts ?? '?');
+                    const wk   = (u.weekendShifts ?? '?');
+                    const intv = (u.shiftInterval ?? '?');
+                    const settingsLine = `Limity: ${wd}+${wk} / měs · interval ${intv} dní`;
+                    const tooltip = hasNote
+                      ? `${settingsLine}\n\n${note}`
+                      : `${settingsLine}\n(Klikni pro přidání poznámky pro Q${targetQuarter}/${targetYear})`;
+                    return (
+                      <th
+                        key={u.uid}
+                        title={tooltip}
+                        onClick={() => {
+                          setEditingNoteUid(u.uid);
+                          setEditingNoteText(note || '');
+                        }}
+                        className={cn(
+                          "py-0 h-6 text-xs font-semibold transition-colors cursor-pointer",
+                          u.isActive
+                            ? "text-white bg-blue-700 hover:bg-blue-600"
+                            : "text-gray-400 bg-gray-600 opacity-70 hover:bg-gray-500"
+                        )}
+                      >
+                        {u.shortcut}
+                        {hasNote && <span style={{ marginLeft: 2, color: '#ffd54f' }}>•</span>}
+                      </th>
+                    );
+                  })}
               </tr>
             </thead>
             <tbody>
@@ -891,7 +1168,7 @@ export default function Scheduler() {
           </div>
 
           {/* === Navigace kvartálu === */}
-          <div className="flex items-center gap-3 mb-8">
+          <div className="flex items-center gap-3 mb-3">
             <button
               onClick={handlePrev}
               className="px-5 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 font-medium transition"
@@ -899,8 +1176,11 @@ export default function Scheduler() {
               ← Pre
             </button>
             <div className="flex-1 text-center">
-              <div className="text-xl font-bold text-blue-700">
-                Q{targetQuarter} {targetYear}
+              <div className={cn(
+                "text-xl font-bold",
+                isFixed ? "text-amber-700" : "text-blue-700"
+              )}>
+                {isFixed && '🔒 '}Q{targetQuarter} {targetYear}
               </div>
             </div>
             <button
@@ -909,6 +1189,32 @@ export default function Scheduler() {
             >
               Nx →
             </button>
+          </div>
+
+          {/* === Fixace kvartálu — write-protect proti náhodným úpravám === */}
+          <div className="mb-6">
+            <button
+              type="button"
+              onClick={toggleFixation}
+              className={cn(
+                "w-full py-2 rounded-lg font-semibold transition shadow-sm text-sm",
+                isFixed
+                  ? "bg-amber-100 text-amber-900 border border-amber-400 hover:bg-amber-200"
+                  : "bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200"
+              )}
+              title={isFixed
+                ? `Zafixováno ${fixation?.fixedAt ? new Date(fixation.fixedAt).toLocaleString('cs-CZ') : ''}. Klikni pro odfixování.`
+                : 'Zamkne kvartál proti všem úpravám (klik / Vymazat / Auto / Optimalizátor).'}
+            >
+              {isFixed
+                ? `🔒 Zafixováno ${fixation?.fixedAt ? '· ' + new Date(fixation.fixedAt).toLocaleDateString('cs-CZ') : ''} · klikni pro odfixování`
+                : '🔓 Zafixovat kvartál'}
+            </button>
+            {isFixed && (
+              <p className="text-[11px] text-amber-700 mt-1 text-center">
+                Edity zablokovány. Optimalizátor → Aplikovat odmítne zápis.
+              </p>
+            )}
           </div>
           {/* === STATISTIKY – vrácené a vylepšené! === */}
           <div className="space-y-6">
@@ -1027,7 +1333,14 @@ export default function Scheduler() {
                       </button>
                       <button
                         onClick={() => loadFromMemory(slot)}
-                        className="flex-1 py-2 bg-white hover:bg-blue-50 text-blue-700 font-medium text-sm rounded-br-lg transition"
+                        disabled={isFixed}
+                        title={isFixed ? 'Kvartál je zafixovaný — Load by přepsal data.' : ''}
+                        className={cn(
+                          "flex-1 py-2 font-medium text-sm rounded-br-lg transition",
+                          isFixed
+                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                            : "bg-white hover:bg-blue-50 text-blue-700"
+                        )}
                       >
                         Load
                       </button>
@@ -1046,7 +1359,14 @@ export default function Scheduler() {
             {/* Auto Weekends solver */}
               <button
                 onClick={autoAssignWeekends}
-                className="flex-1 py-3 bg-orange-600 text-white rounded-lg font-semibold hover:bg-orange-700 transition shadow-md text-sm"
+                disabled={isFixed}
+                title={isFixed ? 'Kvartál je zafixovaný.' : ''}
+                className={cn(
+                  "flex-1 py-3 rounded-lg font-semibold transition shadow-md text-sm text-white",
+                  isFixed
+                    ? "bg-gray-300 cursor-not-allowed"
+                    : "bg-orange-600 hover:bg-orange-700"
+                )}
               >
                 Auto Weekends
               </button>
@@ -1074,8 +1394,124 @@ export default function Scheduler() {
               Exp BIT
             </button>
           </div>
+
+          {/* === Destruktivní akce: Vymazat + Obnovit ===
+              Vymaže služby pro ROZBALENÉ skupiny v aktuálním kvartálu;
+              sbalené skupiny zůstanou. Záloha drží jeden krok zpět.
+              Při zafixovaném kvartálu jsou disabled. */}
+          <div className="flex gap-3 mt-3">
+            <button
+              onClick={clearAssignments}
+              disabled={isFixed}
+              className={cn(
+                "flex-1 py-3 rounded-lg font-semibold transition shadow-md text-sm text-white",
+                isFixed
+                  ? "bg-gray-300 cursor-not-allowed"
+                  : "bg-red-600 hover:bg-red-700"
+              )}
+              title={isFixed
+                ? 'Kvartál je zafixovaný — pro mazání nejdřív odfixovat.'
+                : 'Vymaže služby pro rozbalené skupiny v aktuálním kvartálu. Sbalené skupiny zůstanou. Záloha umožní jeden krok zpět.'}
+            >
+              Vymazat služby
+            </button>
+            {lastClearBackup && (
+              <button
+                onClick={restoreLastClear}
+                disabled={isFixed}
+                className={cn(
+                  "flex-1 py-3 rounded-lg font-semibold transition shadow-md text-sm text-white",
+                  isFixed
+                    ? "bg-gray-300 cursor-not-allowed"
+                    : "bg-amber-500 hover:bg-amber-600"
+                )}
+                title={isFixed
+                  ? 'Kvartál je zafixovaný.'
+                  : `Obnoví ${lastClearBackup.count} buněk smazaných ${new Date(lastClearBackup.clearedAt).toLocaleString('cs-CZ')}`}
+              >
+                ↶ Obnovit ({lastClearBackup.count})
+              </button>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Quarter-note edit modal — opened by clicking a doctor's name in the
+          table header. Admin shortcut for capturing a doctor's spoken context
+          (doctors edit their own notes via Settings.js). */}
+      {editingNoteUid && (() => {
+        const target = Object.values(users).flat().find(u => u.uid === editingNoteUid);
+        const label = target?.shortcut || editingNoteUid.slice(0, 6);
+        const wd   = target?.weekdayShifts ?? '?';
+        const wk   = target?.weekendShifts ?? '?';
+        const intv = target?.shiftInterval ?? '?';
+        return (
+          <div
+            onClick={() => setEditingNoteUid(null)}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+              zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: 'white', padding: 20, borderRadius: 8,
+                width: 'min(560px, 90vw)', boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+              }}
+            >
+              <h3 style={{ margin: 0, marginBottom: 8 }}>
+                Poznámka pro {label} — Q{targetQuarter}/{targetYear}
+              </h3>
+              <div style={{
+                margin: '0 0 10px', padding: '6px 10px',
+                background: '#eef4fb', borderLeft: '3px solid #1976d2',
+                borderRadius: 3, fontSize: '0.85em', color: '#333',
+              }}>
+                Limity: <strong>{wd}+{wk}</strong> / měsíc · interval <strong>{intv}</strong> dní
+                <span style={{ color: '#888', marginLeft: 8 }}>
+                  (uprav v Admin panelu)
+                </span>
+              </div>
+              <p style={{ margin: 0, marginBottom: 10, fontSize: '0.85em', color: '#666' }}>
+                Krátký kontext k preferencím tohoto kvartálu (např. „prefer either 31.7+2.8 OR 7.8+9.8, ne obojí“).
+                Lékař vidí a edituje stejnou poznámku ve svém Nastavení.
+              </p>
+              <textarea
+                value={editingNoteText}
+                onChange={(e) => setEditingNoteText(e.target.value)}
+                rows={5}
+                style={{
+                  width: '100%', padding: 8, fontSize: '0.95em',
+                  border: '1px solid #ccc', borderRadius: 4, fontFamily: 'inherit',
+                  resize: 'vertical',
+                }}
+                autoFocus
+              />
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setEditingNoteUid(null)}
+                  style={{
+                    padding: '8px 14px', background: '#eee', border: 'none',
+                    borderRadius: 4, cursor: 'pointer',
+                  }}
+                >
+                  Zrušit
+                </button>
+                <button
+                  onClick={() => saveQuarterNote(editingNoteUid, editingNoteText)}
+                  style={{
+                    padding: '8px 14px', background: '#1976d2', color: 'white',
+                    border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 500,
+                  }}
+                >
+                  Uložit
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

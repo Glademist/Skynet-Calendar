@@ -32,7 +32,9 @@ export const generateHolidays = () => {
     { title: 'Vánoce 2. svátek', month: 12, day: 25 },
     { title: 'Vánoce 3. svátek', month: 12, day: 26 },
   ];
-  for (let year = 2025; year <= 2030; year++) {
+  // Range covers historical backfill (manually-entered past quarters) + ~5y forward.
+  // generateHolidays is called by Statistics.js which audits past assignments.
+  for (let year = 2020; year <= 2030; year++) {
     const easterSunday = getEasterSunday(year);
     const goodFriday = new Date(easterSunday);
     goodFriday.setDate(easterSunday.getDate() - 2);

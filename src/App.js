@@ -6,6 +6,8 @@ import csLocale from '@fullcalendar/core/locales/cs';
 import Login from './Login';
 import Settings from './Settings';
 import Scheduler from './Scheduler';
+import Optimizer from './Optimizer';
+import Statistics from './Statistics';
 import AdminPanel from './AdminPanel';
 import NotificationBar from './NotificationBar';
 import ApprovalPending from './ApprovalPending';
@@ -299,7 +301,16 @@ function App() {
     return <Login />;
   }
 
-  const isAdmin = user?.email === 'skaryd81@gmail.com';
+  // Saša is the sole full admin (user approvals, limit edits, JSON export).
+  // `isPlanner` is a wider circle that can run Plánovač + Optimalizátor.
+  // To grant planner access, add the email below. Admin is intentionally
+  // kept narrow — promote to admin only for trusted co-maintainers.
+  const PLANNER_EMAILS = [
+    'skaryd81@gmail.com',
+    'brzulova.lucie@gmail.com',
+  ];
+  const isAdmin   = user?.email === 'skaryd81@gmail.com';
+  const isPlanner = PLANNER_EMAILS.includes(user?.email);
 
   return (
     <div className="app-layout">
@@ -317,9 +328,19 @@ function App() {
           >
             Nastavení
           </button>
-          {isAdmin && (
+          {isPlanner && (
             <button className={view === 'scheduler' ? "app-navActive" : ''} onClick={() => setView('scheduler')}>
               Plánovač
+            </button>
+          )}
+          {isPlanner && (
+            <button className={view === 'optimizer' ? "app-navActive" : ''} onClick={() => setView('optimizer')}>
+              Optimalizátor
+            </button>
+          )}
+          {isPlanner && (
+            <button className={view === 'statistics' ? "app-navActive" : ''} onClick={() => setView('statistics')}>
+              Statistiky
             </button>
           )}
           {isAdmin && (
@@ -431,11 +452,13 @@ function App() {
         {view === 'settings' && (
           <Settings user={user} onSave={() => setView('calendar')} />
         )}
-        {view === 'scheduler' && isAdmin && (
+        {view === 'scheduler' && isPlanner && (
           <div className="scheduler-container">
             <Scheduler />
           </div>
         )}
+        {view === 'optimizer' && isPlanner && <Optimizer />}
+        {view === 'statistics' && isPlanner && <Statistics />}
         {view === 'admin' && isAdmin && <AdminPanel />}
         {view === 'blocked' && (
           <div className="app-blockedEmail">

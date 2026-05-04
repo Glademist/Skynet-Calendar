@@ -53,11 +53,27 @@ export default function AdminPanel() {
   const updateGroups = async (uid, newGroups) => {
     try {
       await updateDoc(doc(db, 'settings', uid), { groups: newGroups });
-      setUsers(prev => prev.map(u => 
+      setUsers(prev => prev.map(u =>
         u.uid === uid ? { ...u, groups: newGroups } : u
       ));
     } catch (err) {
       console.error('Chyba při ukládání skupin:', err);
+    }
+  };
+
+  // Inline-edit weekday/weekend/interval. Settings.js stores weekdayShifts and
+  // weekendShifts as STRINGS (Firestore has both ints and the special 'X'
+  // flexible marker), so we keep the value as-typed without coercion. Empty
+  // string is allowed and treated as 'X' downstream by the optimizer.
+  const updateField = async (uid, field, raw) => {
+    const value = (raw ?? '').toString().trim();
+    try {
+      await updateDoc(doc(db, 'settings', uid), { [field]: value });
+      setUsers(prev => prev.map(u =>
+        u.uid === uid ? { ...u, [field]: value } : u
+      ));
+    } catch (err) {
+      console.error(`Chyba při ukládání ${field}:`, err);
     }
   };
 
@@ -79,6 +95,9 @@ export default function AdminPanel() {
               <th>Jméno</th>
               <th>Email</th>
               <th>Skupiny</th>
+              <th title="Měsíční limit všedních dní (číslo, nebo X = flexibilní)">WD/měs</th>
+              <th title="Měsíční limit víkendových dní (číslo, nebo X = flexibilní)">WK/měs</th>
+              <th title="Minimální interval mezi službami (dní)">Interval</th>
               <th>Schváleno</th>
               <th>Akce</th>
             </tr>
@@ -87,9 +106,9 @@ export default function AdminPanel() {
             {users.map(u => (
               <tr key={u.uid}>
                 <td>
-                  <input 
-                    className="adm-shortcutInput" 
-                    value={u.shortcut || ''} 
+                  <input
+                    className="adm-shortcutInput"
+                    value={u.shortcut || ''}
                     onChange={e => changeShortcut(u.uid, e.target.value)}
                     style={{width: '60px'}}
                   />
@@ -115,6 +134,32 @@ export default function AdminPanel() {
                       <span>{g}</span>
                     </label>
                   ))}
+                </td>
+                <td>
+                  <input
+                    defaultValue={u.weekdayShifts ?? ''}
+                    onBlur={e => updateField(u.uid, 'weekdayShifts', e.target.value)}
+                    style={{ width: 50, textAlign: 'center' }}
+                    title="Číslo nebo X = flexibilní"
+                  />
+                </td>
+                <td>
+                  <input
+                    defaultValue={u.weekendShifts ?? ''}
+                    onBlur={e => updateField(u.uid, 'weekendShifts', e.target.value)}
+                    style={{ width: 50, textAlign: 'center' }}
+                    title="Číslo nebo X = flexibilní"
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    defaultValue={u.shiftInterval ?? ''}
+                    onBlur={e => updateField(u.uid, 'shiftInterval', e.target.value)}
+                    style={{ width: 50, textAlign: 'center' }}
+                    title="Minimální dny mezi službami"
+                    min="1"
+                  />
                 </td>
                 <td className={u.approved ? "adm-statusApproved" : "adm-statusPending"}>
                   {u.approved ? '✓' : '⏳'}
