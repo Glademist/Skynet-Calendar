@@ -140,11 +140,16 @@ class Worker:
         self.desired_duty         = []
         self.undesired_duty       = []
         # Dates this worker has shifts in OTHER groups (when one group is
-        # being optimized at a time). These count toward spacing/interval/
-        # destroyed_weekend/consec_wk_weeks rules but NOT toward
-        # count_workday/count_weekend/count_total/friday/month_target_dev,
-        # which are scoped to the group currently being scheduled.
-        # Empty list when running standalone.
+        # being optimized at a time). These count toward
+        #   - spacing/interval/destroyed_weekend/consec_wk_weeks (so a
+        #     Mladí Friday next to a Střední Sunday for the same doctor
+        #     correctly fires destroyed_weekend), AND
+        #   - count_workday/count_weekend/count_total (so a multi-group
+        #     doctor's per-quarter limit is the TOTAL across all groups —
+        #     externals are pre-spent budget, not free shifts).
+        # They still do NOT participate in friday and month_target_dev,
+        # which are distribution/fairness rules scoped to the group being
+        # scheduled. Empty list when running standalone.
         self.external_duties      = []
         self.availability_handicap= 0.0   # computed pre-run
         self.n_days_blocked_fraction = 0.0
@@ -505,12 +510,38 @@ def compute_availability_handicap(
     target_total = target_wd + target_wk
     target_fri   = int(ideal_fridays)
 
+    # External duties contribute to count_* in the scorer, so the floor
+    # must mirror that: count externals as already-spent budget when
+    # checking achievability. Two structural cases produce unavoidable
+    # violations:
+    #   (a) ext alone exceeds target — doctor is over-quota before the GA
+    #       even starts (rare but possible if a senior group was overfilled).
+    #   (b) avail + ext < target — doctor can't reach target even by
+    #       grabbing every available day.
+    # Both contribute to the floor so the GA doesn't penalize the doctor
+    # for state it cannot change.
+    ext_wd = 0
+    ext_wk = 0
+    for d in worker.external_duties:
+        if d not in cal:
+            continue
+        cidx = cal[d].index
+        if cidx in (1.125, 1.01, 1.25):
+            ext_wd += 1
+        elif cidx in (1.3, 1.37, 1.6):
+            ext_wk += 1
+    ext_total = ext_wd + ext_wk
+
     floor_violations = {}
-    if avail_workday < target_wd:
-        floor_violations["count_workday"] = max(1, target_wd - avail_workday)
-    if avail_weekend < target_wk:
-        floor_violations["count_weekend"] = max(1, target_wk - avail_weekend)
-    if avail_total < target_total:
+    if ext_wd > target_wd:
+        floor_violations["count_workday"] = max(1, ext_wd - target_wd)
+    elif avail_workday + ext_wd < target_wd:
+        floor_violations["count_workday"] = max(1, target_wd - (avail_workday + ext_wd))
+    if ext_wk > target_wk:
+        floor_violations["count_weekend"] = max(1, ext_wk - target_wk)
+    elif avail_weekend + ext_wk < target_wk:
+        floor_violations["count_weekend"] = max(1, target_wk - (avail_weekend + ext_wk))
+    if ext_total > target_total or avail_total + ext_total < target_total:
         floor_violations["count_total"] = 1
     if avail_friday < target_fri:
         floor_violations["friday"] = 1
@@ -566,13 +597,19 @@ def _count_violations_for_worker(
 
     # ── Cross-group extension ─────────────────────────────────────────────────
     # external_duties = dates this worker has shifts in OTHER groups (when
-    # one group is being scheduled at a time). They participate in spacing/
-    # interval/destroyed_weekend/consec_wk_weeks rules so a doctor's Mladí
-    # Friday next to her Střední Sunday correctly fires destroyed_weekend.
-    # They do NOT participate in count_*/friday/month_target_dev (those are
-    # group-scoped expectations).
+    # one group is being scheduled at a time). They participate in:
+    #   - spacing/interval/destroyed_weekend/consec_wk_weeks  (via duties_*_ext)
+    #   - count_workday/count_weekend/count_total             (via ext_workday/
+    #     ext_weekend below) — externals are pre-spent budget against the
+    #     doctor's quarterly limit, so a doctor in {střední, mladí} with
+    #     5 střední shifts already booked sees their mladí placements capped
+    #     at (limit - 5) rather than getting a fresh full quota.
+    # They still do NOT participate in friday or month_target_dev (those are
+    # distribution rules scoped to the current group).
     ext_pv_extra  = []
     ext_all_extra = []
+    ext_workday   = 0
+    ext_weekend   = 0
     if cw.external_duties:
         date_to_idx = {ds: ix for ix, ds in enumerate(date_idx)}
         for d in cw.external_duties:
@@ -583,6 +620,10 @@ def _count_violations_for_worker(
             if cidx == 1.25 or cidx in (1.3, 1.37, 1.6):
                 ext_pv_extra.append(ix)
             ext_all_extra.append(ix)
+            if cidx in (1.125, 1.01, 1.25):
+                ext_workday += 1
+            elif cidx in (1.3, 1.37, 1.6):
+                ext_weekend += 1
 
     duties_pv_ext = sorted(set(duties_pv + ext_pv_extra)) if ext_pv_extra else duties_pv
     duties_ext    = sorted(set(duties    + ext_all_extra)) if ext_all_extra else duties
@@ -590,21 +631,21 @@ def _count_violations_for_worker(
     violations = {}
 
     # ── Weekend count ──────────────────────────────────────────────────────────
-    n_wk = len(duties_weekend)
+    n_wk = len(duties_weekend) + ext_weekend
     ok_wk = (int(lwk) <= n_wk <= int(lwk) + 1) if not hardw else (n_wk == int(lwk))
     if not ok_wk:
         diff = abs(n_wk - int(lwk))
         violations["count_weekend"] = max(1, diff)
 
     # ── Workday count ──────────────────────────────────────────────────────────
-    n_wd = len(duties_p)
+    n_wd = len(duties_p) + ext_workday
     ok_wd = (int(lwd) <= n_wd <= int(lwd) + 1) if not hard else (n_wd == int(lwd))
     if not ok_wd:
         diff = abs(n_wd - int(lwd))
         violations["count_workday"] = max(1, diff)
 
     # ── Total count ───────────────────────────────────────────────────────────
-    n_total   = len(duties)
+    n_total   = len(duties) + ext_workday + ext_weekend
     lim_total = lwd + lwk
     ok_tot = (int(lim_total) <= n_total <= int(lim_total) + 1) \
              if (not hard or not hardw) else (n_total == int(lim_total))
