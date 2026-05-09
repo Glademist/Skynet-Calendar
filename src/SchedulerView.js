@@ -16,7 +16,7 @@
 //    that need violation info elsewhere can call the exported helpers
 //    independently.
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { generateHolidays } from './utils';
 import { clsx } from 'clsx';
 import './Scheduler.css';
@@ -117,6 +117,31 @@ export function computeDisplayedDays(days, viewMode) {
   });
 }
 
+// Merge per-quarter overrides of weekdayShifts/weekendShifts/shiftInterval
+// into the flat user list. `overrides` is the raw doc data from
+// `quarterShiftOverrides/{year}_Q${quarter}` keyed by uid. Any missing field
+// (or empty string) keeps the global value from `settings/{uid}`. Sets
+// `_overrideKeys` on each touched user so headers can render an indicator
+// without re-reading the override doc.
+const OVERRIDE_FIELDS = ['weekdayShifts', 'weekendShifts', 'shiftInterval'];
+export function applyShiftOverrides(allUsers, overrides) {
+  if (!overrides) return allUsers;
+  return allUsers.map(u => {
+    const o = overrides[u.uid];
+    if (!o) return u;
+    const merged = { ...u };
+    const usedKeys = [];
+    for (const k of OVERRIDE_FIELDS) {
+      if (o[k] !== undefined && o[k] !== '') {
+        merged[k] = o[k];
+        usedKeys.push(k);
+      }
+    }
+    merged._overrideKeys = usedKeys;
+    return merged;
+  });
+}
+
 // =====================================================================
 // <GroupToggleBar> — group expand/collapse pills + view-mode toggle.
 // Sits at the top of the right panel in both Scheduler and Optimizer.
@@ -213,6 +238,7 @@ export function ScheduleGrid({
   onDoctorContextMenu,
   cellDecoration,
   doctorDecoration,
+  userOverrideStatus,  // (u) => 0|1|2|3 — colors header by # of per-quarter limit overrides.
 }) {
   // Interval/weekend conflict heatmap. Re-derived per render — cheap because
   // it only iterates the visible cells, and assignments rarely changes
@@ -319,11 +345,22 @@ export function ScheduleGrid({
               const wk = (u.weekendShifts ?? '?');
               const intv = (u.shiftInterval ?? '?');
               const settingsLine = `Limity: ${wd}+${wk} / měs · interval ${intv} dní`;
+              const ostatus = userOverrideStatus?.(u) ?? 0;
+              const overrideLine = ostatus > 0
+                ? `\n⚠️ ${ostatus}/3 limitů přepsáno pro Q${targetQuarter}/${targetYear}`
+                : '';
               const tooltip = hasNote
-                ? `${settingsLine}\n\n${note}`
-                : `${settingsLine}${onDoctorClick ? `\n(Klikni pro přidání poznámky pro Q${targetQuarter}/${targetYear})` : ''}`;
+                ? `${settingsLine}${overrideLine}\n\n${note}`
+                : `${settingsLine}${overrideLine}${onDoctorClick ? `\n(Klikni pro přidání poznámky pro Q${targetQuarter}/${targetYear})` : ''}`;
               const deco = doctorDecoration?.(u);
               const isAce = !!deco?.ace;
+              // Override status colors the active header so admin sees at a
+              // glance which doctors have per-quarter limit overrides.
+              // Inactive (collapsed-group) headers stay grey regardless.
+              let activeBg = "text-white bg-blue-700 hover:bg-blue-600";
+              if (u.isActive && ostatus === 1) activeBg = "text-gray-900 bg-yellow-400 hover:bg-yellow-300";
+              else if (u.isActive && ostatus === 2) activeBg = "text-white bg-orange-500 hover:bg-orange-400";
+              else if (u.isActive && ostatus === 3) activeBg = "text-white bg-red-500 hover:bg-red-400";
               return (
                 <th
                   key={u.uid}
@@ -337,7 +374,7 @@ export function ScheduleGrid({
                     "py-0 h-6 text-xs font-semibold transition-colors",
                     (onDoctorClick || onDoctorContextMenu) && "cursor-pointer",
                     u.isActive
-                      ? "text-white bg-blue-700 hover:bg-blue-600"
+                      ? activeBg
                       : "text-gray-400 bg-gray-600 opacity-70 hover:bg-gray-500",
                     isAce && "line-through opacity-70"
                   )}
@@ -463,10 +500,45 @@ export function ScheduleGrid({
 
 // =====================================================================
 // <StatsPanel> — per-group, per-month shift counts.
+//
+// Two display modes (toggle in header):
+//   • # Počty   — raw shift counts per category (default)
+//   • Δ Diff    — counts minus the doctor's target (`actual − target`).
+//                 Target = (numeric u.weekdayShifts) × multiplier; for 'X'
+//                 (flexible) doctors the target is the per-group calendar
+//                 ideal computed exactly like the GA does it. multiplier = 3
+//                 for the quarter view, 1 for a month view.
+//
+// Categorisation rules (svátek wins):
+//   • Holiday (any DOW)  → weekend (so 1.5. on a Friday counts as weekend)
+//   • DOW 0 / 6          → weekend
+//   • DOW 1–5, !holiday  → weekday  (Po–Pá)
+//   • Friday counter (informative — never feeds weekday or weekend totals):
+//       DOW 5 && !holiday          → counted
+//       DOW 4 && nextDay = Fri+holiday → counted (substitution: Thursday
+//         carries the "Friday-feel" when Friday is a holiday)
+//
 // Used by Scheduler in the right panel; Optimizer can opt in for fairness
 // at-a-glance. selectedMonth: 0 = quarter total; 1/2/3 = first/second/third
 // month of the quarter.
 // =====================================================================
+
+const MONTH_NAMES = [
+  '', 'Leden', 'Únor', 'Březen', 'Duben', 'Květen', 'Červen',
+  'Červenec', 'Srpen', 'Září', 'Říjen', 'Listopad', 'Prosinec',
+];
+
+// String-or-'X' limit parser. Returns { numeric: number|null, isFlex: bool }.
+// '' or 'X' (case-insensitive) → flexible; numeric string → numeric; anything
+// else (garbage) → numeric=null + isFlex=false (defensive).
+function parseLimit(raw) {
+  if (raw === undefined || raw === null) return { numeric: null, isFlex: true };
+  const s = String(raw).trim();
+  if (s === '' || s.toUpperCase() === 'X') return { numeric: null, isFlex: true };
+  const n = Number(s);
+  if (Number.isFinite(n)) return { numeric: n, isFlex: false };
+  return { numeric: null, isFlex: false };
+}
 
 export function StatsPanel({
   groupOrder,
@@ -480,11 +552,58 @@ export function StatsPanel({
   selectedMonth,
   setSelectedMonth,
 }) {
+  // Toggle "# Počty" ↔ "Δ Diff". Per-instance state — Plánovač and
+  // Optimizér each keep their own preference.
+  const [diffMode, setDiffMode] = useState(false);
+
   const quarterMonths = useMemo(
     () => [qStartMonth + 1, qStartMonth + 2, qStartMonth + 3],
     [qStartMonth]
   );
 
+  // Czech holidays as a Set of date strings. Recomputed once per render —
+  // generateHolidays() returns the full 2020–2030 list which is cheap, but
+  // Set lookup keeps the per-day check O(1).
+  const holidaySet = useMemo(
+    () => new Set(generateHolidays().map(h => h.date)),
+    []
+  );
+
+  // ── Period day counts for the group-ideal calculation ──────────────────
+  // Both per-month (1/2/3) and quarter totals. Indexed identically to
+  // getMonthlyStats(user) so we can sum or pick the right slice.
+  const periodDayCounts = useMemo(() => {
+    const buckets = {
+      1: { wd: 0, wk: 0 },
+      2: { wd: 0, wk: 0 },
+      3: { wd: 0, wk: 0 },
+    };
+    for (const date of days) {
+      const d = new Date(date);
+      const realMonth = d.getMonth() + 1;
+      const mIndex = quarterMonths.indexOf(realMonth) + 1;
+      if (mIndex === 0) continue;          // pre-quarter Friday lead-in etc.
+      const dow = d.getDay();
+      const holiday = holidaySet.has(date);
+      if (dow === 0 || dow === 6 || holiday) buckets[mIndex].wk += 1;
+      else buckets[mIndex].wd += 1;
+    }
+    return buckets;
+  }, [days, quarterMonths, holidaySet]);
+
+  const periodForView = (mIdx) => {
+    if (mIdx === 0) {
+      return {
+        wd: periodDayCounts[1].wd + periodDayCounts[2].wd + periodDayCounts[3].wd,
+        wk: periodDayCounts[1].wk + periodDayCounts[2].wk + periodDayCounts[3].wk,
+      };
+    }
+    return periodDayCounts[mIdx];
+  };
+
+  // Per-doctor per-month stats. fridays is informative only — it never feeds
+  // weekday or weekend (which are mutually exclusive buckets that already
+  // sum to total).
   const getMonthlyStats = (user) => {
     const stats = {
       1: { weekday: 0, fridays: 0, weekend: 0, total: 0 },
@@ -499,10 +618,27 @@ export function StatsPanel({
       const mIndex = quarterMonths.indexOf(realMonth) + 1;
       if (mIndex === 0) return;
       const dow = d.getDay();
-      if (dow === 5) stats[mIndex].fridays++;
-      else if (dow === 6 || dow === 0) stats[mIndex].weekend++;
-      else stats[mIndex].weekday++;
-      stats[mIndex].total++;
+      const holiday = holidaySet.has(date);
+
+      // Fairness bucket — svátek wins.
+      if (dow === 0 || dow === 6 || holiday) stats[mIndex].weekend += 1;
+      else stats[mIndex].weekday += 1;
+
+      // Friday counter (informational). Normal Fri = +1; if today is Thu and
+      // tomorrow is a Friday-holiday, Thu substitutes (it's the actual
+      // "before-the-long-weekend" shift).
+      if (dow === 5 && !holiday) {
+        stats[mIndex].fridays += 1;
+      } else if (dow === 4) {
+        const next = new Date(d);
+        next.setDate(next.getDate() + 1);
+        const nextStr = next.toLocaleDateString('en-CA');
+        if (next.getDay() === 5 && holidaySet.has(nextStr)) {
+          stats[mIndex].fridays += 1;
+        }
+      }
+
+      stats[mIndex].total += 1;
     });
     return stats;
   };
@@ -520,9 +656,77 @@ export function StatsPanel({
     return m[selectedMonth];
   };
 
+  // ── Group-level ideal target for 'X' doctors ─────────────────────────
+  // Mirrors skynet_v08_claude.timespan_ideal_values. Computed per group +
+  // per period (quarter / month) — different groups have different sizes
+  // and different mixes of hard/'X' limits, so each table has its own ideal.
+  const computeGroupIdeal = (groupVisibleUsers) => {
+    const period = periodForView(selectedMonth);
+    const multiplier = selectedMonth === 0 ? 3 : 1;
+    let minus_wd = 0, minus_wk = 0;
+    let n_flex_wd = 0, n_flex_wk = 0;
+    for (const u of groupVisibleUsers) {
+      const wd = parseLimit(u.weekdayShifts);
+      const wk = parseLimit(u.weekendShifts);
+      if (wd.isFlex) n_flex_wd += 1;
+      else if (wd.numeric !== null) minus_wd += wd.numeric * multiplier;
+      if (wk.isFlex) n_flex_wk += 1;
+      else if (wk.numeric !== null) minus_wk += wk.numeric * multiplier;
+    }
+    const ideal_wd = n_flex_wd > 0 ? Math.max(0, period.wd - minus_wd) / n_flex_wd : 0;
+    const ideal_wk = n_flex_wk > 0 ? Math.max(0, period.wk - minus_wk) / n_flex_wk : 0;
+    return { ideal_wd, ideal_wk };
+  };
+
+  // Per-doctor target = (numeric × multiplier) OR (group ideal for 'X').
+  // null = unknown (no limit configured at all).
+  const getTargetForView = (user, groupIdeal) => {
+    const wd = parseLimit(user.weekdayShifts);
+    const wk = parseLimit(user.weekendShifts);
+    const multiplier = selectedMonth === 0 ? 3 : 1;
+    const target_wd = wd.numeric !== null
+      ? wd.numeric * multiplier
+      : (wd.isFlex ? groupIdeal.ideal_wd : null);
+    const target_wk = wk.numeric !== null
+      ? wk.numeric * multiplier
+      : (wk.isFlex ? groupIdeal.ideal_wk : null);
+    return { target_wd, target_wk };
+  };
+
+  // Render-cell formatter. In Diff mode returns a coloured string; in count
+  // mode returns the absolute integer.
+  const formatCell = (actual, target) => {
+    if (!diffMode) return { value: actual, className: '' };
+    if (target === null) return { value: '—', className: 'text-gray-400' };
+    const diff = actual - Math.round(target);
+    return {
+      value: diff > 0 ? `+${diff}` : String(diff),
+      className: diff < 0 ? 'text-red-600 font-semibold'
+               : diff > 0 ? 'text-emerald-600 font-semibold'
+               : 'text-gray-500',
+    };
+  };
+
   return (
     <div className="space-y-6">
-      <h3 className="text-lg font-semibold text-gray-800">Statistiky služeb</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-gray-800">Statistiky služeb</h3>
+        <button
+          type="button"
+          onClick={() => setDiffMode(d => !d)}
+          title={diffMode
+            ? 'Přepnout na absolutní počty'
+            : 'Přepnout na rozdíl vůči požadavku doktora (×3 pro kvartál, ×1 pro měsíc)'}
+          className={cn(
+            "px-2 py-0.5 rounded text-xs font-medium transition-colors",
+            diffMode
+              ? "bg-purple-600 text-white hover:bg-purple-700"
+              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+          )}
+        >
+          {diffMode ? 'Δ Diff' : '# Počty'}
+        </button>
+      </div>
       <div className="flex flex-wrap gap-2 mb-4">
         <button
           onClick={() => setSelectedMonth(0)}
@@ -537,8 +741,7 @@ export function StatsPanel({
         </button>
         {[1, 2, 3].map(m => {
           const realMonthNum = qStartMonth + m;
-          const monthName = ['', 'Leden', 'Únor', 'Březen', 'Duben', 'Květen', 'Červen',
-            'Červenec', 'Srpen', 'Září', 'Říjen', 'Listopad', 'Prosinec'][realMonthNum];
+          const monthName = MONTH_NAMES[realMonthNum];
           return (
             <button
               key={m}
@@ -558,6 +761,7 @@ export function StatsPanel({
       {groupOrder.map(group => {
         const groupVisibleUsers = visibleUsers.filter(u => u.groups?.includes(group));
         if (collapsed[group] || groupVisibleUsers.length === 0) return null;
+        const groupIdeal = computeGroupIdeal(groupVisibleUsers);
         return (
           <div key={group} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
             <h4 className="font-medium text-gray-700 mb-3">
@@ -576,34 +780,58 @@ export function StatsPanel({
               </thead>
               <tbody className="divide-y divide-gray-200">
                 <tr>
-                  <td className="py-1.5 font-medium text-gray-600">Po–Čt</td>
-                  {groupVisibleUsers.map(u => (
-                    <td key={u.uid} className="text-center py-1.5">
-                      {getStatsForView(u).weekday}
-                    </td>
-                  ))}
-                </tr>
-                <tr>
-                  <td className="py-1.5 font-medium text-gray-600">Pátek</td>
-                  {groupVisibleUsers.map(u => (
-                    <td key={u.uid} className="text-center py-1.5 text-sky-600 font-medium">
-                      {getStatsForView(u).fridays}
-                    </td>
-                  ))}
+                  <td className="py-1.5 font-medium text-gray-600">Všední</td>
+                  {groupVisibleUsers.map(u => {
+                    const stats = getStatsForView(u);
+                    const t = getTargetForView(u, groupIdeal);
+                    const c = formatCell(stats.weekday, t.target_wd);
+                    return (
+                      <td key={u.uid} className={cn("text-center py-1.5", c.className)}>
+                        {c.value}
+                      </td>
+                    );
+                  })}
                 </tr>
                 <tr>
                   <td className="py-1.5 font-medium text-gray-600">Víkend</td>
-                  {groupVisibleUsers.map(u => (
-                    <td key={u.uid} className="text-center py-1.5 text-orange-600 font-medium">
-                      {getStatsForView(u).weekend}
-                    </td>
-                  ))}
+                  {groupVisibleUsers.map(u => {
+                    const stats = getStatsForView(u);
+                    const t = getTargetForView(u, groupIdeal);
+                    const c = formatCell(stats.weekend, t.target_wk);
+                    // Keep the orange tint for raw counts; in Diff mode the
+                    // colour from formatCell wins (red/green/grey).
+                    const className = diffMode
+                      ? c.className
+                      : 'text-orange-600 font-medium';
+                    return (
+                      <td key={u.uid} className={cn("text-center py-1.5", className)}>
+                        {c.value}
+                      </td>
+                    );
+                  })}
                 </tr>
                 <tr className="font-bold bg-blue-50">
                   <td className="py-2 text-gray-800">Celkem</td>
+                  {groupVisibleUsers.map(u => {
+                    const stats = getStatsForView(u);
+                    const t = getTargetForView(u, groupIdeal);
+                    const totalTarget = (t.target_wd !== null && t.target_wk !== null)
+                      ? t.target_wd + t.target_wk
+                      : null;
+                    const c = formatCell(stats.total, totalTarget);
+                    return (
+                      <td key={u.uid} className={cn("text-center py-2 font-bold",
+                        diffMode ? c.className : 'text-gray-900')}>
+                        {c.value}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr className="border-t border-gray-300">
+                  <td className="py-1.5 font-medium text-gray-500 italic">Pátek (info)</td>
                   {groupVisibleUsers.map(u => (
-                    <td key={u.uid} className="text-center py-2 text-gray-900 font-bold">
-                      {getStatsForView(u).total}
+                    <td key={u.uid} className="text-center py-1.5 text-sky-600 italic">
+                      {getStatsForView(u).fridays}
                     </td>
                   ))}
                 </tr>

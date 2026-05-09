@@ -31,6 +31,7 @@ import {
   getEffectiveStatus,
   getBaseGroup,
   getDisplayLabel,
+  applyShiftOverrides,
 } from './SchedulerView';
 
 const cn = (...inputs) => clsx(inputs);
@@ -146,7 +147,17 @@ export default function Optimizer() {
     setLoaded(false);
     const fetchData = async () => {
       const settingsSnap = await getDocs(collection(db, 'settings'));
-      const allUsers = settingsSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+      const allUsersRaw = settingsSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+
+      // Pull per-quarter limit overrides BEFORE grouping. Merging here means
+      // every consumer (GA payload, StatsPanel, ScheduleGrid interval check)
+      // sees the overridden weekdayShifts/weekendShifts/shiftInterval without
+      // a separate code path.
+      const overridesSnap = await getDoc(
+        doc(db, 'quarterShiftOverrides', `${year}_Q${quarter}`)
+      );
+      const overridesData = overridesSnap.exists() ? overridesSnap.data() : {};
+      const allUsers = applyShiftOverrides(allUsersRaw, overridesData);
 
       const grouped = {};
       allUsers.forEach(u => {
@@ -738,6 +749,7 @@ export default function Optimizer() {
           onDoctorContextMenu={handleDoctorRightClick}
           cellDecoration={cellDecoration}
           doctorDecoration={doctorDecoration}
+          userOverrideStatus={u => (u._overrideKeys?.length ?? 0)}
         />
 
         {/* PRAVÝ PANEL — kompaktní, jen run/apply */}

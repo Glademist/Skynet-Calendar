@@ -30,6 +30,7 @@ import {
   getEffectiveStatus,
   getBaseGroup,
   getDisplayLabel,
+  applyShiftOverrides,
 } from './SchedulerView';
 
 const cn = (...inputs) => clsx(inputs);
@@ -86,7 +87,18 @@ export default function Scheduler() {
     setAssignmentsLoaded(false);
     const fetchData = async () => {
       const snapshot = await getDocs(collection(db, 'settings'));
-      const allUsers = snapshot.docs.map(d => ({ uid: d.id, ...d.data() }));
+      const allUsersRaw = snapshot.docs.map(d => ({ uid: d.id, ...d.data() }));
+
+      // Load per-quarter limit overrides BEFORE grouping, so the per-doctor
+      // weekdayShifts/weekendShifts/shiftInterval values inside `users` (and
+      // therefore everything downstream — StatsPanel diff targets, interval
+      // violations in ScheduleGrid, header indicator) reflect what the admin
+      // configured for this quarter.
+      const overridesSnap = await getDoc(
+        doc(db, 'quarterShiftOverrides', `${targetYear}_Q${targetQuarter}`)
+      );
+      const overridesData = overridesSnap.exists() ? overridesSnap.data() : {};
+      const allUsers = applyShiftOverrides(allUsersRaw, overridesData);
 
       const grouped = {};
       allUsers.forEach(u => {
@@ -735,6 +747,7 @@ export default function Scheduler() {
           onCellClick={handleCellClick}
           onCellContextMenu={handleContextMenu}
           onDoctorClick={onDoctorClick}
+          userOverrideStatus={u => (u._overrideKeys?.length ?? 0)}
         />
 
         {/* PRAVÝ PANEL */}
