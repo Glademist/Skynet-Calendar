@@ -121,12 +121,26 @@ P_DESTROYED_WEEKEND    = 5.0   # two premium days within ≤3 days (e.g. Fri+Sun
                                # — explicitly waived if BOTH days are in the
                                # doctor's desired_duty (they asked for it).
 
+# Convex count-penalty shape (count_workday / count_weekend / count_total / friday).
+# Replaces the old linear `abs(actual - target)` violation magnitude.
+#   - soft zone (between fair share and wish, or symmetric beyond wish):
+#       (gap / span)^2 where gap = actual - wish, span = max(|wish - fair|, MIN_SPAN).
+#       Convex curve: marginal cost per missing shift grows the further from wish.
+#       Symmetric above and below wish.
+#   - unfair zone (actual < min(wish, fair)): doctor is short of their fair share AND
+#       short of what they wanted. Adds K_UNFAIR * (threshold - actual)^2 on top.
+# Friday uses K_UNFAIR=0 path (pure symmetric — fair == wish for that distribution
+# rule, no separate "shortchanged" notion).
+MIN_SPAN = 1.0   # floor for the per-doctor span, keeps low-wish doctors from exploding
+K_UNFAIR = 5.0   # multiplier on the unfair-below-fair-share term
+
 
 # ── Data classes ──────────────────────────────────────────────────────────────
 
 class Worker:
     __slots__ = ("letter", "employment", "min_interval",
                  "limit_workday", "limit_weekend",
+                 "fair_wd", "fair_wk",
                  "desired_duty", "undesired_duty",
                  "external_duties",
                  "availability_handicap", "n_days_blocked_fraction")
@@ -137,6 +151,14 @@ class Worker:
         self.min_interval         = 7
         self.limit_workday        = 0
         self.limit_weekend        = 0
+        # Per-doctor "fair share" of weekday/weekend shifts — the equal-split
+        # baseline (total_*_demand / sum_employment * worker.employment), used by
+        # count_penalty as the threshold between the soft and harsh penalty zones.
+        # Distinct from limit_* (which is the doctor's *wish*): a doctor whose
+        # wish is above fair is in the "wants extras" zone, below fair is in the
+        # "wants less than fair share" zone.
+        self.fair_wd              = 0.0
+        self.fair_wk              = 0.0
         self.desired_duty         = []
         self.undesired_duty       = []
         # Dates this worker has shifts in OTHER groups (when one group is
@@ -268,6 +290,33 @@ def within_type_cost(n: int) -> float:
     return total
 
 
+def count_penalty(actual: float, wish: float, fair: float,
+                  k_unfair: float = K_UNFAIR) -> float:
+    """Convex, zoned penalty for shift-count deviation from a doctor's wish.
+
+    - Returns 0 when actual == wish.
+    - Soft part: (gap / span)^2 where gap = actual - wish and span = max(|wish - fair|, MIN_SPAN).
+      Symmetric above and below wish.
+    - Unfair part: when actual < min(wish, fair) (doctor is short of their fair share AND
+      short of what they wanted), add k_unfair * (threshold - actual)^2 on top.
+      Pass k_unfair=0 for distributions where wish == fair and the asymmetric harsh
+      zone isn't meaningful (friday).
+    """
+    if actual == wish:
+        return 0.0
+
+    span = max(abs(wish - fair), MIN_SPAN)
+    gap  = actual - wish
+    soft = (gap / span) ** 2
+
+    threshold = min(wish, fair)
+    if k_unfair > 0 and actual < threshold:
+        unfair_gap = threshold - actual
+        return soft + k_unfair * (unfair_gap ** 2)
+
+    return soft
+
+
 def split_penalty(violation_counts: dict, weight: float = 1.0) -> tuple:
     """Compute (critical_penalty, soft_penalty) separately.
 
@@ -284,11 +333,20 @@ def split_penalty(violation_counts: dict, weight: float = 1.0) -> tuple:
     crit_n   = violation_counts.get("critical", 0)
     critical = within_type_cost(crit_n) * P_CRITICAL  # never scaled
 
+    # count_* and friday now carry float penalty values directly (from count_penalty),
+    # not integer violation counts. They bypass within_type_cost (which would treat
+    # them as repetition multipliers) — the convex (gap/span)^2 shape already encodes
+    # the "many missing shifts hurt more than few" curve.
+    FLOAT_COUNT_TYPES = {"count_workday", "count_weekend", "count_total", "friday"}
+
     type_totals = []
     for type_name, n in violation_counts.items():
         if n <= 0 or type_name == "critical":
             continue
-        base = within_type_cost(n)
+        if type_name in FLOAT_COUNT_TYPES:
+            base = float(n)
+        else:
+            base = within_type_cost(n)
         mag = {
             "interval":         P_INTERVAL,
             "weekend_spacing":  P_WEEKEND_SPACING,
@@ -426,6 +484,20 @@ def timespan_ideal_values(cal: dict, workers: dict):
     ideal_wd = (total_wd - minus_wd) / n_wd_flex if n_wd_flex else 0
     ideal_wk = (total_wk - minus_wk) / n_wk_flex if n_wk_flex else 0
     print(f"Ideal workday: {ideal_wd:.2f}   Ideal weekend: {ideal_wk:.2f}")
+
+    # Per-doctor "fair share": total demand split equally across all doctors,
+    # weighted by employment. Distinct from ideal_wd/wk (which only splits the
+    # *remaining* demand among flexible workers, after hard-set workers take
+    # their stated limit). Used by count_penalty.
+    total_emp = sum(float(w.employment) for w in workers.values()) or 1.0
+    fair_wd_per_fte = total_wd / total_emp
+    fair_wk_per_fte = total_wk / total_emp
+    for w in workers.values():
+        emp = float(w.employment)
+        w.fair_wd = fair_wd_per_fte * emp
+        w.fair_wk = fair_wk_per_fte * emp
+    print(f"Fair share per FTE: wd={fair_wd_per_fte:.2f}  wk={fair_wk_per_fte:.2f}")
+
     return float(ideal_wd), float(ideal_wk)
 
 
@@ -501,25 +573,24 @@ def compute_availability_handicap(
 
     avail_total = avail_workday + avail_weekend
 
-    # Resolve targets — at this point limit_* may be int (for hard workers,
-    # set explicitly) or float (for X-workers, replaced by ideal*employment
-    # in update_workers_ideal). The penalty engine uses int(lwd) as the
-    # canonical target, so we do the same here.
-    target_wd    = int(worker.limit_workday)
-    target_wk    = int(worker.limit_weekend)
+    # Resolve targets as floats (count_penalty operates on floats; X-workers'
+    # limits resolve to ideal*employment which is non-integer).
+    target_wd    = float(worker.limit_workday)
+    target_wk    = float(worker.limit_weekend)
     target_total = target_wd + target_wk
-    target_fri   = int(ideal_fridays)
+    target_fri   = float(ideal_fridays)
 
     # External duties contribute to count_* in the scorer, so the floor
     # must mirror that: count externals as already-spent budget when
     # checking achievability. Two structural cases produce unavoidable
-    # violations:
+    # penalty (no placement strategy can avoid them):
     #   (a) ext alone exceeds target — doctor is over-quota before the GA
     #       even starts (rare but possible if a senior group was overfilled).
     #   (b) avail + ext < target — doctor can't reach target even by
     #       grabbing every available day.
-    # Both contribute to the floor so the GA doesn't penalize the doctor
-    # for state it cannot change.
+    # In both cases the floor = the best-case count_penalty given the
+    # achievable range [ext, ext + avail]. The GA's adjusted score subtracts
+    # this floor so the doctor isn't punished for state they can't change.
     ext_wd = 0
     ext_wk = 0
     for d in worker.external_duties:
@@ -532,19 +603,35 @@ def compute_availability_handicap(
             ext_wk += 1
     ext_total = ext_wd + ext_wk
 
+    def _floor_for(min_actual, max_actual, wish, fair, k_unfair=K_UNFAIR):
+        """Best-case count_penalty when actual is constrained to [min, max]."""
+        if min_actual <= wish <= max_actual:
+            return 0.0
+        best = min_actual if wish < min_actual else max_actual
+        return count_penalty(best, wish, fair, k_unfair=k_unfair)
+
     floor_violations = {}
-    if ext_wd > target_wd:
-        floor_violations["count_workday"] = max(1, ext_wd - target_wd)
-    elif avail_workday + ext_wd < target_wd:
-        floor_violations["count_workday"] = max(1, target_wd - (avail_workday + ext_wd))
-    if ext_wk > target_wk:
-        floor_violations["count_weekend"] = max(1, ext_wk - target_wk)
-    elif avail_weekend + ext_wk < target_wk:
-        floor_violations["count_weekend"] = max(1, target_wk - (avail_weekend + ext_wk))
-    if ext_total > target_total or avail_total + ext_total < target_total:
-        floor_violations["count_total"] = 1
-    if avail_friday < target_fri:
-        floor_violations["friday"] = 1
+    wd_floor = _floor_for(ext_wd, ext_wd + avail_workday,
+                          target_wd, worker.fair_wd)
+    if wd_floor > 0:
+        floor_violations["count_workday"] = wd_floor
+
+    wk_floor = _floor_for(ext_wk, ext_wk + avail_weekend,
+                          target_wk, worker.fair_wk)
+    if wk_floor > 0:
+        floor_violations["count_weekend"] = wk_floor
+
+    fair_total = worker.fair_wd + worker.fair_wk
+    tot_floor = _floor_for(ext_total, ext_total + avail_total,
+                           target_total, fair_total)
+    if tot_floor > 0:
+        floor_violations["count_total"] = tot_floor
+
+    # Friday: wish == fair == ideal_fridays, k_unfair=0 (pure symmetric).
+    fri_floor = _floor_for(0, avail_friday, target_fri, target_fri,
+                           k_unfair=0.0)
+    if fri_floor > 0:
+        floor_violations["friday"] = fri_floor
 
     _, floor = split_penalty(floor_violations, weight=stage_weight)
 
@@ -575,8 +662,6 @@ def _count_violations_for_worker(
     min_int = int(cw.min_interval) + 1
     lwd     = cw.limit_workday
     lwk     = cw.limit_weekend
-    hard    = float(lwd).is_integer()
-    hardw   = float(lwk).is_integer()
 
     duties_p       = []
     duties_friday  = []
@@ -630,32 +715,43 @@ def _count_violations_for_worker(
 
     violations = {}
 
+    # ── Convex zoned count penalties ──────────────────────────────────────────
+    # See count_penalty() docstring + MIN_SPAN/K_UNFAIR constants. Each of these
+    # carries a float magnitude (not an integer violation count); split_penalty
+    # routes count_* and friday through the FLOAT_COUNT_TYPES branch.
+    #
+    # Externals count toward the totals so a multi-group doctor's per-quarter
+    # limit is total-across-groups, not per-group.
+
     # ── Weekend count ──────────────────────────────────────────────────────────
     n_wk = len(duties_weekend) + ext_weekend
-    ok_wk = (int(lwk) <= n_wk <= int(lwk) + 1) if not hardw else (n_wk == int(lwk))
-    if not ok_wk:
-        diff = abs(n_wk - int(lwk))
-        violations["count_weekend"] = max(1, diff)
+    wk_pen = count_penalty(n_wk, float(lwk), cw.fair_wk)
+    if wk_pen > 0:
+        violations["count_weekend"] = wk_pen
 
     # ── Workday count ──────────────────────────────────────────────────────────
     n_wd = len(duties_p) + ext_workday
-    ok_wd = (int(lwd) <= n_wd <= int(lwd) + 1) if not hard else (n_wd == int(lwd))
-    if not ok_wd:
-        diff = abs(n_wd - int(lwd))
-        violations["count_workday"] = max(1, diff)
+    wd_pen = count_penalty(n_wd, float(lwd), cw.fair_wd)
+    if wd_pen > 0:
+        violations["count_workday"] = wd_pen
 
     # ── Total count ───────────────────────────────────────────────────────────
-    n_total   = len(duties) + ext_workday + ext_weekend
-    lim_total = lwd + lwk
-    ok_tot = (int(lim_total) <= n_total <= int(lim_total) + 1) \
-             if (not hard or not hardw) else (n_total == int(lim_total))
-    if not ok_tot:
-        violations["count_total"] = 1
+    n_total    = len(duties) + ext_workday + ext_weekend
+    wish_total = float(lwd) + float(lwk)
+    fair_total = cw.fair_wd + cw.fair_wk
+    tot_pen = count_penalty(n_total, wish_total, fair_total)
+    if tot_pen > 0:
+        violations["count_total"] = tot_pen
 
     # ── Friday distribution ───────────────────────────────────────────────────
+    # No per-doctor wish exists for fridays — everyone targets the equal share
+    # `ideal_fridays`. Pass wish == fair so the unfair harsh zone never fires
+    # (k_unfair=0 path): just a symmetric (actual - ideal)^2 / MIN_SPAN^2 curve.
     n_fri = len(duties_friday)
-    if not (int(ideal_fridays) <= n_fri <= int(ideal_fridays) + 1):
-        violations["friday"] = 1
+    fri_pen = count_penalty(n_fri, float(ideal_fridays), float(ideal_fridays),
+                            k_unfair=0.0)
+    if fri_pen > 0:
+        violations["friday"] = fri_pen
 
     # ── Weekend spacing (no two premium days within 10 days) ─────────────────
     # Uses duties_pv_ext = same-group premium days + cross-group external premium
