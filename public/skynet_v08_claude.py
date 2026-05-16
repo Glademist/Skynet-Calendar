@@ -120,18 +120,27 @@ P_MONTH_TARGET_DEV     = 2.0   # per-doctor per-month deviation from an
 P_DESTROYED_WEEKEND    = 5.0   # two premium days within ≤3 days (e.g. Fri+Sun)
                                # — explicitly waived if BOTH days are in the
                                # doctor's desired_duty (they asked for it).
+P_DESIRED_MISS         = 0.5   # soft penalty per *missed* desired (preferred/green)
+                               # date. Preferred is a hint, not a command —
+                               # apply_availability no longer hard-locks the day
+                               # to green doctors. GA honors green when feasible
+                               # but fairness wins if an alternative scores
+                               # meaningfully better. Capped at the doctor's
+                               # actual shift count so marking N green dates
+                               # doesn't expand a wish of M < N shifts.
 
 # Convex count-penalty shape (count_workday / count_weekend / count_total / friday).
 # Replaces the old linear `abs(actual - target)` violation magnitude.
-#   - soft zone (between fair share and wish, or symmetric beyond wish):
-#       (gap / span)^2 where gap = actual - wish, span = max(|wish - fair|, MIN_SPAN).
-#       Convex curve: marginal cost per missing shift grows the further from wish.
-#       Symmetric above and below wish.
+#   - soft zone: (actual - wish)^2 — absolute, NOT normalized by upside.
+#       Same per-shift cost regardless of doctor's wish magnitude. Sum-of-squares
+#       across doctors is minimized when shortfall is distributed evenly, so the
+#       GA actively pulls outliers toward the average shortfall. Earlier draft
+#       normalized by max(|wish-fair|, 1) but that dampened the very signal we
+#       need: high-wish doctors should feel the same per-shift bite as low-wish.
 #   - unfair zone (actual < min(wish, fair)): doctor is short of their fair share AND
 #       short of what they wanted. Adds K_UNFAIR * (threshold - actual)^2 on top.
-# Friday uses K_UNFAIR=0 path (pure symmetric — fair == wish for that distribution
-# rule, no separate "shortchanged" notion).
-MIN_SPAN = 1.0   # floor for the per-doctor span, keeps low-wish doctors from exploding
+# Friday uses K_UNFAIR=0 path (pure symmetric — wish == fair == ideal_fridays
+# for that distribution rule, no separate "shortchanged" notion).
 K_UNFAIR = 5.0   # multiplier on the unfair-below-fair-share term
 
 
@@ -295,19 +304,22 @@ def count_penalty(actual: float, wish: float, fair: float,
     """Convex, zoned penalty for shift-count deviation from a doctor's wish.
 
     - Returns 0 when actual == wish.
-    - Soft part: (gap / span)^2 where gap = actual - wish and span = max(|wish - fair|, MIN_SPAN).
-      Symmetric above and below wish.
-    - Unfair part: when actual < min(wish, fair) (doctor is short of their fair share AND
-      short of what they wanted), add k_unfair * (threshold - actual)^2 on top.
-      Pass k_unfair=0 for distributions where wish == fair and the asymmetric harsh
-      zone isn't meaningful (friday).
+    - Soft part: (actual - wish)^2 — same per-shift bite regardless of how big
+      the doctor's wish is. Sum-of-squares across doctors is minimized when
+      shortfall is distributed evenly → the GA pulls outliers (e.g. a doctor at
+      -4 vs peers at -1) toward the average. Symmetric above and below wish.
+    - Unfair part: when actual < min(wish, fair) (doctor is short of their fair
+      share AND short of what they wanted), add k_unfair * (threshold - actual)^2
+      on top — heavy floor protecting "wished at least average" against being
+      pushed below.
+      Pass k_unfair=0 for distributions where wish == fair and the asymmetric
+      harsh zone isn't meaningful (friday).
     """
     if actual == wish:
         return 0.0
 
-    span = max(abs(wish - fair), MIN_SPAN)
     gap  = actual - wish
-    soft = (gap / span) ** 2
+    soft = gap ** 2
 
     threshold = min(wish, fair)
     if k_unfair > 0 and actual < threshold:
@@ -357,6 +369,7 @@ def split_penalty(violation_counts: dict, weight: float = 1.0) -> tuple:
             "consec_wk_weeks":  P_CONSEC_WEEKEND_WEEKS,
             "month_target_dev":         P_MONTH_TARGET_DEV,
             "destroyed_weekend":        P_DESTROYED_WEEKEND,
+            "desired_miss":             P_DESIRED_MISS,
         }.get(type_name, 1.0)
         type_totals.append(base * mag * weight)
 
@@ -434,11 +447,9 @@ def calendar_availability(cal: dict, workers: dict) -> dict:
     for day, d in cal.items():
         d.possible_duty = [w.letter for w in workers.values()
                            if day not in w.undesired_duty]
-    for day, d in cal.items():
-        desired = [w.letter for w in workers.values()
-                   if day in w.desired_duty]
-        if desired:
-            d.possible_duty = desired
+    # desired_duty (preferred / green) is now a SOFT preference scored via
+    # the `desired_miss` violation, not a hard restriction on possible_duty.
+    # See P_DESIRED_MISS constant.
     try:
         overrides = {}
         with open(OverrideFilename) as f:
@@ -716,7 +727,7 @@ def _count_violations_for_worker(
     violations = {}
 
     # ── Convex zoned count penalties ──────────────────────────────────────────
-    # See count_penalty() docstring + MIN_SPAN/K_UNFAIR constants. Each of these
+    # See count_penalty() docstring + K_UNFAIR constant. Each of these
     # carries a float magnitude (not an integer violation count); split_penalty
     # routes count_* and friday through the FLOAT_COUNT_TYPES branch.
     #
@@ -746,7 +757,7 @@ def _count_violations_for_worker(
     # ── Friday distribution ───────────────────────────────────────────────────
     # No per-doctor wish exists for fridays — everyone targets the equal share
     # `ideal_fridays`. Pass wish == fair so the unfair harsh zone never fires
-    # (k_unfair=0 path): just a symmetric (actual - ideal)^2 / MIN_SPAN^2 curve.
+    # (k_unfair=0 path): just a symmetric (actual - ideal)^2 curve.
     n_fri = len(duties_friday)
     fri_pen = count_penalty(n_fri, float(ideal_fridays), float(ideal_fridays),
                             k_unfair=0.0)
@@ -878,6 +889,23 @@ def _count_violations_for_worker(
 
                     if total_dev > 0.0:
                         violations["month_target_dev"] = int(round(total_dev))
+
+    # ── Soft desired-day matching ─────────────────────────────────────────────
+    # desired_duty (preferred / green) is no longer a hard lock on possible_duty.
+    # Instead we penalize each "missed" preferred date: a date the doctor flagged
+    # as desired but didn't end up assigned to. Capped at the doctor's actual
+    # shift count so marking 10 greens with wish=2 only counts up to 2 misses
+    # (preferred doesn't expand the quota — it just expresses, "of my N shifts,
+    # I'd prefer these dates").
+    # Uses `duties` = same-group shifts; externals from other groups don't count
+    # toward this group's preferred matching.
+    if cw.desired_duty:
+        desired_set = set(cw.desired_duty)
+        matched     = sum(1 for i in duties if date_idx[i] in desired_set)
+        target      = min(len(desired_set), len(duties))
+        miss        = target - matched
+        if miss > 0:
+            violations["desired_miss"] = miss
 
     return violations
 
@@ -1281,6 +1309,64 @@ def run_stage(
     return global_best
 
 
+# ── Polish pass (deterministic local search) ──────────────────────────────────
+
+def polish_swap_pass(
+    seq: Sequence,
+    workers: dict, cal: dict, date_idx: list,
+    ideal_fridays: float, stage_weight: float = 1.0,
+) -> tuple:
+    """Greedy pairwise-swap local search after the GA finishes.
+
+    For every pair of days (i, j), try swapping the assigned doctors. If the
+    result is strictly better by ScheduleScore.is_better_than (lower
+    total_adjusted, then lower variance, then more workers_at_best), accept it
+    and continue. Repeat full passes until no swap improves.
+
+    This catches "obvious to a human" pairwise swaps that the GA's mutation
+    (one cell at a time) and crossover (block-wise) can't easily discover —
+    e.g., resolving a single interval/critical violation by exchanging a doctor
+    with a peer on a different day.
+
+    Validity check: a swap is only attempted when both swapped placements are
+    in their day's possible_duty. Overrides (manual locks) appear in possible_duty
+    as a single-element list, so they naturally block any swap that would
+    violate them.
+
+    Returns (best_seq, n_swaps_applied, n_passes).
+    """
+    n = len(seq.workers)
+    total_swaps = 0
+    n_passes = 0
+    while True:
+        n_passes += 1
+        pass_swaps = 0
+        s = seq.workers
+        for i in range(n):
+            for j in range(i + 1, n):
+                wi, wj = s[i], s[j]
+                if wi == wj:
+                    continue
+                # Hard validity (possible_duty respects undesired_duty + overrides).
+                if wj not in cal[date_idx[i]].possible_duty:
+                    continue
+                if wi not in cal[date_idx[j]].possible_duty:
+                    continue
+                new_str = s[:i] + wj + s[i + 1:j] + wi + s[j + 1:]
+                cand = Sequence(workers=new_str)
+                evaluate(cand, workers, cal, date_idx, ideal_fridays, stage_weight)
+                if cand.score.is_better_than(seq.score):
+                    seq = cand
+                    s   = new_str
+                    pass_swaps += 1
+        total_swaps += pass_swaps
+        print(f"  Polish pass {n_passes}: {pass_swaps} swaps  "
+              f"→ total_adjusted={seq.score.total_adjusted:.3f}")
+        if pass_swaps == 0:
+            break
+    return seq, total_swaps, n_passes
+
+
 # ── Library entry-point (file-free) ───────────────────────────────────────────
 #
 # The CLI block below (`if __name__ == "__main__":`) is preserved bit-for-bit
@@ -1320,11 +1406,9 @@ def apply_availability(cal: dict, workers: dict,
     for day, d in cal.items():
         d.possible_duty = [w.letter for w in workers.values()
                            if day not in w.undesired_duty]
-    for day, d in cal.items():
-        desired = [w.letter for w in workers.values()
-                   if day in w.desired_duty]
-        if desired:
-            d.possible_duty = desired
+    # desired_duty (preferred / green) is now a SOFT preference scored via
+    # the `desired_miss` violation, not a hard restriction on possible_duty.
+    # See P_DESIRED_MISS constant.
     for day, name in overrides.items():
         if day in cal and name in workers:
             cal[day].possible_duty = [workers[name].letter]
@@ -1392,6 +1476,15 @@ def optimize(
             stage_idx, cycles, weight, best_seq,
             workers, cal, date_idx, ideal_fridays, crossover_breaks)
 
+    # Deterministic polish: pairwise-swap local search at full weight.
+    # Catches obvious-to-a-human swaps that GA mutation/crossover misses.
+    print(f"\n{'═' * 60}")
+    print(" Polish pass")
+    print(f"{'═' * 60}")
+    best_seq, n_polish_swaps, n_polish_passes = polish_swap_pass(
+        best_seq, workers, cal, date_idx, ideal_fridays, stage_weight=1.0)
+    print(f"Polish complete: {n_polish_swaps} swaps in {n_polish_passes} pass(es).")
+
     letter_to_name = {w.letter: key for key, w in workers.items()}
     assignments = {ds: letter_to_name.get(best_seq.workers[i], None)
                    for i, ds in enumerate(date_idx)}
@@ -1440,6 +1533,14 @@ if __name__ == "__main__":
         best_seq = run_stage(
             stage_idx, cycles, weight, best_seq,
             workers, cal, date_idx, ideal_fridays, crossover_breaks)
+
+    # ── Polish pass ───────────────────────────────────────────────────────────
+    print(f"\n{'═' * 60}")
+    print(" Polish pass")
+    print(f"{'═' * 60}")
+    best_seq, n_polish_swaps, n_polish_passes = polish_swap_pass(
+        best_seq, workers, cal, date_idx, ideal_fridays, stage_weight=1.0)
+    print(f"Polish complete: {n_polish_swaps} swaps in {n_polish_passes} pass(es).")
 
     # ── Finalise calendar ─────────────────────────────────────────────────────
     letter_to_name = {w.letter: key for key, w in workers.items()}
