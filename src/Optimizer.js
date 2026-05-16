@@ -306,6 +306,83 @@ export default function Optimizer() {
     });
   }, []);
 
+  // ── Bulk lock operations over currently-expanded groups ────────────────
+  // Scope: every cell in `optimizerAssignments` whose base group is in the
+  // set of groups currently expanded in the GroupToggleBar (collapsed[g]
+  // === false). Spans the whole quarter — independent of selectedMonth.
+  const handleLockAll = useCallback(() => {
+    const activeGroups = new Set(GROUPS.filter(g => !collapsed[g]));
+    if (activeGroups.size === 0) {
+      window.notify?.('Žádná skupina není rozbalená.', 'info');
+      return;
+    }
+    setLockedCells(prev => {
+      const next = new Set(prev);
+      let added = 0;
+      for (const [key, value] of Object.entries(optimizerAssignments)) {
+        if (!value) continue;
+        const g = getBaseGroup(value);
+        if (!g || !activeGroups.has(g)) continue;
+        if (!next.has(key)) { next.add(key); added++; }
+      }
+      if (added > 0) {
+        window.notify?.(`🔒 Uzamčeno ${added} buněk`, 'success');
+      } else {
+        window.notify?.('Vše už bylo uzamčené.', 'info');
+      }
+      return next;
+    });
+  }, [collapsed, optimizerAssignments]);
+
+  const handleUnlockAll = useCallback(() => {
+    const activeGroups = new Set(GROUPS.filter(g => !collapsed[g]));
+    if (activeGroups.size === 0) {
+      window.notify?.('Žádná skupina není rozbalená.', 'info');
+      return;
+    }
+    setLockedCells(prev => {
+      const next = new Set(prev);
+      let removed = 0;
+      for (const [key, value] of Object.entries(optimizerAssignments)) {
+        if (!value) continue;
+        const g = getBaseGroup(value);
+        if (!g || !activeGroups.has(g)) continue;
+        if (next.has(key)) { next.delete(key); removed++; }
+      }
+      if (removed > 0) {
+        window.notify?.(`🔓 Odemčeno ${removed} buněk`, 'success');
+      } else {
+        window.notify?.('Žádné buňky nebyly uzamčené.', 'info');
+      }
+      return next;
+    });
+  }, [collapsed, optimizerAssignments]);
+
+  const handleToggleLocks = useCallback(() => {
+    const activeGroups = new Set(GROUPS.filter(g => !collapsed[g]));
+    if (activeGroups.size === 0) {
+      window.notify?.('Žádná skupina není rozbalená.', 'info');
+      return;
+    }
+    setLockedCells(prev => {
+      const next = new Set(prev);
+      let locked = 0, unlocked = 0;
+      for (const [key, value] of Object.entries(optimizerAssignments)) {
+        if (!value) continue;
+        const g = getBaseGroup(value);
+        if (!g || !activeGroups.has(g)) continue;
+        if (next.has(key)) { next.delete(key); unlocked++; }
+        else                { next.add(key);    locked++;   }
+      }
+      if (locked || unlocked) {
+        window.notify?.(`🔁 +${locked} 🔒 / −${unlocked} 🔓`, 'success');
+      } else {
+        window.notify?.('Žádné buňky k toggle.', 'info');
+      }
+      return next;
+    });
+  }, [collapsed, optimizerAssignments]);
+
   // Right click on doctor name: toggle ace.
   const handleDoctorRightClick = useCallback((user) => {
     setAceDoctors(prev => {
@@ -874,6 +951,37 @@ export default function Optimizer() {
             <div className="text-[10px] text-gray-500 mb-3 leading-snug">
               <strong>🔒 {lockCount}</strong> buněk · <strong>🚫 {aceCount}</strong> ace.
               Pravým klikem na buňku → lock. Na jméno doktora → ace. Refresh smaže.
+            </div>
+
+            {/* Bulk lock ops — operují na rozbalených skupinách v GroupToggleBar */}
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button
+                type="button"
+                onClick={handleLockAll}
+                disabled={running}
+                className="px-3 py-1 rounded-lg text-xs font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 border border-gray-300 disabled:opacity-50"
+                title="Uzamkne všechny obsazené buňky aktivních skupin."
+              >
+                🔒 Lock all
+              </button>
+              <button
+                type="button"
+                onClick={handleUnlockAll}
+                disabled={running}
+                className="px-3 py-1 rounded-lg text-xs font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 border border-gray-300 disabled:opacity-50"
+                title="Odemkne všechny zamčené buňky aktivních skupin."
+              >
+                🔓 Unlock all
+              </button>
+              <button
+                type="button"
+                onClick={handleToggleLocks}
+                disabled={running}
+                className="px-3 py-1 rounded-lg text-xs font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 border border-gray-300 disabled:opacity-50"
+                title="Invertuje lock-stav buněk aktivních skupin."
+              >
+                🔁 Toggle
+              </button>
             </div>
 
             {/* Progress / status panel */}
